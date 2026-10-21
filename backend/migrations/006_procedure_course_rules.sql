@@ -1,0 +1,9 @@
+ALTER TABLE procedures
+    ADD COLUMN IF NOT EXISTS min_interval_days INTEGER NOT NULL DEFAULT 1 CHECK (min_interval_days BETWEEN 1 AND 365),
+    ADD COLUMN IF NOT EXISTS default_weekly_count INTEGER NOT NULL DEFAULT 1 CHECK (default_weekly_count BETWEEN 1 AND 7);
+
+ALTER TABLE day_plan_patients
+    ADD COLUMN IF NOT EXISTS stay_days INTEGER NOT NULL DEFAULT 7 CHECK (stay_days BETWEEN 1 AND 365);
+
+ALTER TABLE day_plan_items
+    ADD COLUMN IF NOT EXISTS session_count INTEGER NOT NULL DEFAULT 1 CHECK (session_count BETWEEN 1 AND 365);

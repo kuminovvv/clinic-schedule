@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Clinic Schedule
 
-## Getting Started
+Clinic Schedule: Next.js App Router frontend, Go API и PostgreSQL.
 
-First, run the development server:
+## Расписание
+
+- Недельная сетка с рабочими часами 09:00–16:00 и обедом 13:00–14:00.
+- Каталог из 20 начальных процедур можно изменять: длительность сеанса, минимальный интервал между повторениями (1–365 календарных дней), количество сеансов в неделю по умолчанию (1–7) и флаг расслабляющей процедуры.
+- Для каждого пациента указываются тяжесть состояния, срок пребывания (1–365 календарных дней с выбранной даты) и количество сеансов каждой выбранной процедуры на весь срок. При первом назначении число сеансов предлагается по недельной норме каталога и может быть изменено вручную.
+- Для тяжёлых пациентов расслабляющие процедуры выполняются первыми среди назначенных на один день. Для остальных сохраняется выбранный порядок. Начало сеанса выравнивается по шагу календаря.
+- Записи можно вручную редактировать, переносить и отменять; новые назначения не пересекают обед и существующие записи.
+- Расписание, планы пациентов, процедуры и настройки хранятся в PostgreSQL; страницы календаря, выбора пациентов, каталога и настроек получают начальные данные через Next.js Server Components (SSR).
+- Изменения планов пациентов автоматически сохраняются в PostgreSQL с проверкой версии; генерация на Go API читает план с сервера и не принимает клиентский список заданий.
+- Расстановка процедур выполняется транзакционно на Go API на весь срок пребывания пациента: начало дня в 09:00, рабочее время до 16:00, обед 13:00–14:00. Между повторениями одной процедуры выдерживается минимальный интервал; одну и ту же процедуру нельзя назначить дважды за календарный день.
+- Перед генерацией API рассчитывает предпросмотр; если все сеансы не помещаются в период, сохранение блокируется. Если интервал больше срока пребывания, выдаётся предупреждение с подтверждением перед продолжением. Вручную изменённые записи сохраняются при повторной генерации и учитываются в плане. Планы разных дат различаются как отдельные курсы; одинаковые условные номера пациентов не смешиваются между курсами. Перенос записей допускается только внутри срока пребывания с соблюдением интервалов.
+- Текущая модель рассчитана на одну локальную клинику и условные номера пациентов. Не вводите реальные сведения о пациентах: API пока не имеет аутентификации и не предназначен для публикации в интернете.
+- Ранее сохранённые данные из `localStorage` и `sessionStorage` остаются в браузере и автоматически не импортируются в PostgreSQL. Перед переключением зафиксируйте старые данные; импорт будет отдельным подтверждаемым шагом.
+
+## Структура `src`
+
+- `app/` — маршруты и корневой layout Next.js; страницы подключают виджеты.
+- `widgets/` — крупные самостоятельные блоки страниц.
+- `features/` — пользовательские действия и сценарии.
+- `entities/` — предметные сущности и связанные с ними компоненты.
+- `shared/api/` — общие клиенты и настройки работы с API.
+- `shared/config/` — общие настройки приложения.
+- `shared/lib/` — утилиты и общие хуки.
+- `shared/ui/` — общие UI-компоненты; `shared/ui/shadcn/` — компоненты Shadcn UI.
+
+Зависимости направляются вниз по слоям: `app` → `widgets` → `features` → `entities` → `shared`.
+
+## Команды
+
+- Из корня clinic-schedule/: docker compose up --build -d — запуск PostgreSQL и Go API.
+- Из корня clinic-schedule/: docker compose down — остановка сервисов; данные БД сохраняются.
+- Без Docker, из корня clinic-schedule/: .\backend\setup-local.ps1 (первоначальная настройка), затем .\backend\run-local.ps1 (запуск Go API).
+- Из папки frontend/: pnpm dev — запуск Next.js. URL Go API задаётся через BACKEND_INTERNAL_URL в frontend/.env.local.
+- Из папки frontend/: pnpm run build и pnpm run lint — сборка и статические проверки.
+- Из корня clinic-schedule/: cd backend; go test ./... — тесты Go.
+
+Общая структура и команды запуска описаны в [корневом README](../README.md).
+Корневой docker-compose.yml публикует порты PostgreSQL и API только локально.
+Перед внешней публикацией нужны аутентификация, авторизация, TLS и защита медицинских/персональных данных.
+## Добавление компонентов Shadcn UI
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+pnpm dlx shadcn@latest add button
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
-
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
-
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
-
-## Learn More
-
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+Компоненты добавляются в `src/shared/ui/shadcn/`.

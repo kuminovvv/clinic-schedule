@@ -1,0 +1,28 @@
+# Private configuration (including nested services)
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Local editor, dependency, build, and runtime artifacts
+.idea/
+.vscode/
+**/node_modules/
+**/.next/
+**/out/
+**/dist/
+**/build/
+**/coverage/
+*.tsbuildinfo
+*.log
+*.exe
+*.db
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+*.p12
+*.pfx
+.DS_Store
