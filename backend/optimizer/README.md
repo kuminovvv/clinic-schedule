@@ -42,10 +42,11 @@ GitHub Actions, or deployed images.
   patient blocks all patients. Different patients may be scheduled concurrently
   **because specialists/rooms are not represented in the current data model**.
 - High-severity patients receive relaxing procedures first on shared days.
-- The objective lexicographically favors fitting sessions, then balances
-  daily treatment load, reduces patient waiting within a day, and prefers early
-  appointment starts. Solver returns the best feasible result found in 8 s;
-  mathematical optimality is **not guaranteed** at the time limit.
+- The objective prioritizes fitting sessions, then balances daily treatment
+  load, reduces patient waiting within a day, and prefers early appointment
+  starts. The solver normally searches for 2 seconds (previously 8 seconds);
+  if it cannot find a feasible solution in that interval, it retries for up to
+  6 additional seconds. Mathematical optimality is **not guaranteed**.
 
 **Not implemented:** physician/room/equipment assignment, avoidance of doctor
 idle time, treatment compatibility/contraindications, or evidence-based daily

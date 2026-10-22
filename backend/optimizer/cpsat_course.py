@@ -204,10 +204,19 @@ def solve(data: dict) -> dict:
                    - sum(late_vars))
 
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = 8.0
+    # CP-SAT rarely proves global optimality for the combined date/time model.
+    # With a responsive local preview, two seconds is a better default than
+    # repeatedly waiting eight seconds for a marginal improvement.
+    solver.parameters.max_time_in_seconds = 2.0
     solver.parameters.num_search_workers = 4
     solver.parameters.random_seed = 1
     status = solver.solve(model)
+    if status == cp_model.UNKNOWN:
+        # An unusually constrained course may need more time to find its
+        # first feasible solution. Keep the fast path for ordinary previews,
+        # but avoid turning a time-budget hit into a misleading hard failure.
+        solver.parameters.max_time_in_seconds = 6.0
+        status = solver.solve(model)
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         raise RuntimeError(f"CP-SAT produced no feasible schedule (status {solver.status_name(status)})")
 
