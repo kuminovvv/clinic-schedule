@@ -12,13 +12,27 @@ permissions:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_DB: clinic_test
+          POSTGRES_USER: clinic_test
+          POSTGRES_PASSWORD: test_only_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U clinic_test -d clinic_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      CLINIC_TEST_DATABASE_URL: postgres://clinic_test:test_only_password@127.0.0.1:5432/clinic_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
-      - run: go test ./...
+      - run: go test -count=1 ./...
         working-directory: backend
 
   frontend:
@@ -50,6 +64,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: docker/setup-buildx-action@v3
+      - name: Validate production Docker Compose
+        run: docker compose --env-file .env.production.example -f docker-compose.prod.yml config --quiet
+      - name: Validate Caddy HTTPS configuration
+        env:
+          APP_DOMAIN: clinic.example.com
+          ACME_EMAIL: validation@example.com
+          BASIC_AUTH_USER: clinic
+          BASIC_AUTH_HASH: $2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx4IjWJPDhjvG
+        run: |
+          docker run --rm \
+            -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -e APP_DOMAIN -e ACME_EMAIL -e BASIC_AUTH_USER -e BASIC_AUTH_HASH \
+            caddy:2.10-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
       - name: Check backend Docker image
         uses: docker/build-push-action@v6
         with:
