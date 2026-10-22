@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -174,9 +175,10 @@ func TestEmptyCourseCannotReportSuccessfulGeneration(t *testing.T) {
 	}
 }
 
-func TestCPOptimizerPersistsCalendarCards(t *testing.T) {
-	if os.Getenv("CLINIC_COURSE_OPTIMIZER") != "cp-sat" {
-		t.Skip("only applicable when running the local CP-SAT backend")
+func TestOptimizersPersistCalendarCards(t *testing.T) {
+	mode := os.Getenv("CLINIC_COURSE_OPTIMIZER")
+	if mode != "cp-sat" && mode != "fast" {
+		t.Skip("only applicable when running an experimental optimizer")
 	}
 	db := isolatedScheduleDatabase(t)
 	api := &server{db: db}
@@ -201,7 +203,7 @@ func TestCPOptimizerPersistsCalendarCards(t *testing.T) {
 		t.Fatalf("could not save plan: %d %s", response.Code, response.Body.String())
 	}
 	if response := call(http.MethodPost, "/v1/schedules/generate", scheduleRequest{Date: date}, api.generate); response.Code != http.StatusOK {
-		t.Fatalf("CP-SAT generation did not persist: %d %s", response.Code, response.Body.String())
+		t.Fatalf("%s generation did not persist: %d %s", mode, response.Code, response.Body.String())
 	}
 	request := httptest.NewRequest(http.MethodGet, "/v1/appointments?from=2099-01-05&to=2099-01-12", nil)
 	response := httptest.NewRecorder()
@@ -215,6 +217,54 @@ func TestCPOptimizerPersistsCalendarCards(t *testing.T) {
 	}
 	if len(appointments) != 3 {
 		t.Fatalf("calendar should show three generated cards, got %d", len(appointments))
+	}
+}
+
+func TestFastOptimizerPersistsThreeThousandAppointments(t *testing.T) {
+	if os.Getenv("CLINIC_COURSE_OPTIMIZER") != "fast" {
+		t.Skip("only applicable to the fast local Go optimizer")
+	}
+	db := isolatedScheduleDatabase(t)
+	api := &server{db: db}
+	call := func(method, path string, payload any, handle func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		recorder := httptest.NewRecorder()
+		handle(recorder, httptest.NewRequest(method, path, bytes.NewReader(body)))
+		return recorder
+	}
+	date := "2099-01-05"
+	procedures := make([]procedure, 0, 5)
+	for i := 0; i < 5; i++ {
+		procedures = append(procedures, procedure{ID: fmt.Sprintf("test-%d", i), Name: fmt.Sprintf("Therapy %d", i),
+			DurationMinutes: 30, PreparationMinutes: 20, MinIntervalDays: 1, DefaultWeeklyCount: 7})
+	}
+	if response := call(http.MethodPut, "/v1/procedures", procedures, api.saveProcedures); response.Code != http.StatusOK {
+		t.Fatalf("procedure setup: %d %s", response.Code, response.Body.String())
+	}
+	plan := dayPlan{Date: date, Plans: []patientPlan{}}
+	for patient := 1; patient <= 100; patient++ {
+		p := patientPlan{PatientNumber: patient, Severity: "medium", StayDays: 14, ProcedureIDs: []string{}, ProcedureCounts: map[string]int{}}
+		for _, proc := range procedures {
+			p.ProcedureIDs = append(p.ProcedureIDs, proc.ID)
+			p.ProcedureCounts[proc.ID] = 6
+		}
+		plan.Plans = append(plan.Plans, p)
+	}
+	if response := call(http.MethodPut, "/v1/day-plans", plan, api.saveDayPlan); response.Code != http.StatusOK {
+		t.Fatalf("plan setup: %d %s", response.Code, response.Body.String())
+	}
+	begin := time.Now()
+	if response := call(http.MethodPost, "/v1/schedules/generate", scheduleRequest{Date: date}, api.generate); response.Code != http.StatusOK {
+		t.Fatalf("generate: %d %s", response.Code, response.Body.String())
+	}
+	t.Logf("3000 sessions full API+PostgreSQL generation: %v", time.Since(begin))
+	var count int
+	if err := db.QueryRow(context.Background(), "SELECT count(*) FROM appointments WHERE source_plan_date=$1", date).Scan(&count); err != nil || count != 3000 {
+		t.Fatalf("expected 3000 persisted appointments; got %d: %v", count, err)
 	}
 }
 

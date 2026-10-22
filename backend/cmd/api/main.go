@@ -942,9 +942,12 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var result scheduleResponse
-	if os.Getenv("CLINIC_COURSE_OPTIMIZER") == "cp-sat" {
+	switch os.Getenv("CLINIC_COURSE_OPTIMIZER") {
+	case "fast":
+		result, err = createCourseScheduleFast(day, remainingPlans, procedureMap, settingsValue, occupied, absences)
+	case "cp-sat":
 		result, err = createCourseScheduleCP(r.Context(), day, remainingPlans, procedureMap, settingsValue, occupied, absences)
-	} else {
+	default:
 		result, err = createCourseScheduleWithAbsences(day, remainingPlans, procedureMap, settingsValue, occupied, absences)
 	}
 	if err != nil {
@@ -967,9 +970,24 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	for _, item := range result.Appointments {
-		_, err = tx.Exec(ctx, "INSERT INTO appointments (id,title,start_at,end_at,description,color,status,generated_by_planner,manually_modified,patient_number,source_plan_date,source_procedure_id) VALUES ($1,$2,$3,$4,$5,$6,'scheduled',true,false,$7,$8,$9)", item.ID, item.Title, item.StartAt, item.EndAt, item.Description, item.Color, item.PatientNumber, input.Date, item.ProcedureID)
-		if err != nil {
+	if len(result.Appointments) > 0 {
+		// Pipeline insert statements in one network round-trip rather than
+		// executing 1–3000 independent database round-trips. All statements
+		// still run in the same serializable transaction and roll back together.
+		batch := &pgx.Batch{}
+		for _, item := range result.Appointments {
+			batch.Queue("INSERT INTO appointments (id,title,start_at,end_at,description,color,status,generated_by_planner,manually_modified,patient_number,source_plan_date,source_procedure_id) VALUES ($1,$2,$3,$4,$5,$6,'scheduled',true,false,$7,$8,$9)",
+				item.ID, item.Title, item.StartAt, item.EndAt, item.Description, item.Color, item.PatientNumber, input.Date, item.ProcedureID)
+		}
+		batchResults := tx.SendBatch(ctx, batch)
+		for range result.Appointments {
+			if _, err = batchResults.Exec(); err != nil {
+				_ = batchResults.Close()
+				writeError(w, 409, "schedule conflicts with an existing appointment")
+				return
+			}
+		}
+		if err = batchResults.Close(); err != nil {
 			writeError(w, 409, "schedule conflicts with an existing appointment")
 			return
 		}

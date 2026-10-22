@@ -17,13 +17,14 @@ foreach ($line in Get-Content -LiteralPath $envFile) {
     }
     [Environment]::SetEnvironmentVariable($name, $value, 'Process')
 }
-$env:CLINIC_COURSE_OPTIMIZER = 'cp-sat'
+$env:CLINIC_COURSE_OPTIMIZER = 'fast'
 $python = Join-Path $backend '.venv-cpsat\Scripts\python.exe'
-if (-not (Test-Path -LiteralPath $python)) {
-    throw "Missing CP-SAT Python environment: $python"
+# CP-SAT remains opt-in for comparison; the fast scheduler runs in Go and
+# does not launch Python. It has no separate 80-session/31-day experiment cap.
+if (Test-Path -LiteralPath $python) {
+    $env:CLINIC_OPTIMIZER_PYTHON = $python
+    $env:CLINIC_OPTIMIZER_SCRIPT = (Join-Path $backend 'optimizer\cpsat_course.py')
 }
-$env:CLINIC_OPTIMIZER_PYTHON = $python
-$env:CLINIC_OPTIMIZER_SCRIPT = (Join-Path $backend 'optimizer\cpsat_course.py')
 Set-Location $backend
 & 'C:\Program Files\Go\bin\go.exe' run ./cmd/api
 exit $LASTEXITCODE

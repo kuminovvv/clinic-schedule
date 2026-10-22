@@ -1,4 +1,29 @@
-# Experimental CP-SAT course scheduler (local only)
+# Experimental course schedulers (local only)
+
+## Fast Go scheduler (recommended for interactive use)
+
+`CLINIC_COURSE_OPTIMIZER=fast` selects a deterministic Go heuristic:
+
+- No Python/OR-Tools process startup, external worker or fixed time-budget wait.
+- Supports the existing API limit of **3,000 requested sessions** and patient
+  stays up to **365 days**, instead of the CP-SAT prototype's 80/31 cap.
+- Balances the number of sessions between available days, packs the patient's
+  sessions into reasonably short visits, respects work windows, closures,
+  absences, manual sessions, minimum repetition intervals, the catalog's
+  rolling seven-day maximum and severity-specific relaxing-first ordering.
+- Reports unscheduled sessions when no valid slot exists rather than violating
+  restrictions. Like CP-SAT, it has **no knowledge of doctors, rooms or equipment**
+  because those are not modeled by the application.
+- It is a **heuristic**: unlike a fully solved CP-SAT problem, the result is not
+  a proof of global optimality, and it might miss a feasible allocation on a
+  very constrained course. It must not set clinical treatment policy.
+
+The local launcher below now selects this fast algorithm by default. To
+compare the CP-SAT prototype, set `CLINIC_COURSE_OPTIMIZER=cp-sat` before
+launching the Go backend directly (the launcher intentionally selects fast).
+Neither change affects the production Docker images or their environment.
+
+## Optional CP-SAT prototype
 
 This is a **local, opt-in prototype**, not a medical treatment recommender and
 not part of the deployment Docker images. Default behavior is unchanged.
@@ -14,11 +39,12 @@ powershell -NoProfile -ExecutionPolicy Bypass -File backend\optimizer\start-loca
 ```
 
 The local PowerShell launcher loads the already configured ignored
-`backend/.env.local` and selects `CLINIC_COURSE_OPTIMIZER=cp-sat`, without
+`backend/.env.local` and selects `CLINIC_COURSE_OPTIMIZER=fast`, without
 printing the database password. Stop the existing Go API on port 8081 before
 running it; PostgreSQL and the Next.js dev server need not restart.
 
-The Go API loads `backend/optimizer/cpsat_course.py` when launched with
+The Go API loads `backend/optimizer/cpsat_course.py` **only when the CP-SAT
+flag is chosen** and it is launched with
 `backend` as its working directory. Otherwise set `CLINIC_OPTIMIZER_SCRIPT` and
 `CLINIC_OPTIMIZER_PYTHON` to the full script and interpreter paths. **Restart
 the local Go API** after setting the flag. Leave frontend and PostgreSQL
