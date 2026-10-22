@@ -937,7 +937,12 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not load calendar settings")
 		return
 	}
-	result, err := createCourseScheduleWithAbsences(day, remainingPlans, procedureMap, settingsValue, occupied, absences)
+	var result scheduleResponse
+	if os.Getenv("CLINIC_COURSE_OPTIMIZER") == "cp-sat" {
+		result, err = createCourseScheduleCP(r.Context(), day, remainingPlans, procedureMap, settingsValue, occupied, absences)
+	} else {
+		result, err = createCourseScheduleWithAbsences(day, remainingPlans, procedureMap, settingsValue, occupied, absences)
+	}
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return

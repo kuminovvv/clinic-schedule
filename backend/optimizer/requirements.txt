@@ -1,0 +1,2 @@
+# Locally tested with Python 3.11; not installed in production Docker images.
+ortools==9.15.6755
