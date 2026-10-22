@@ -9,6 +9,7 @@
     # including /api/backend, with authentication at the edge.
     basic_auth {
         {$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+        import /etc/caddy/basic-auth-users.caddy
     }
 
     header {

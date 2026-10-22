@@ -97,6 +97,19 @@ the script on an existing production installation: it refuses to overwrite
 the existing `.env` or demo credentials. The free sslip.io hostname is for
 testing only; use your own domain for a long-lived deployment.
 
+### Additional customer demo logins
+
+On the VPS, run `deploy/scripts/create-demo-accounts.sh` **once** as the
+`clinic-deploy` user to create five separate Basic Auth logins named
+`client01`–`client05`. It refuses to overwrite existing credentials. The
+plain-text credentials are stored only in `/opt/clinic-schedule/demo-clients.txt`
+(0600), while bcrypt hashes are stored in
+`/opt/clinic-schedule/deploy/basic-auth-users.caddy` (0600). This private file
+is mounted into Caddy and **persists across tag-based deployments**; do not add
+it to Git. The original `demo` login remains usable unless intentionally
+revoked. All six logins have the same permissions; these are edge HTTP Basic
+Auth logins, not individual accounts with role-based permissions in the app.
+
 Run locally **after the code is committed and pushed**:
 
 ```sh

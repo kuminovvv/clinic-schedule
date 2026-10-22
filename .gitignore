@@ -33,3 +33,5 @@
 /deploy/.env
 /deploy/backups/
 /backups/
+/deploy/basic-auth-users.caddy
+/demo-clients.txt

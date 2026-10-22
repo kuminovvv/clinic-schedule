@@ -75,6 +75,7 @@ services:
       BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?Set a Caddy bcrypt password hash}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/basic-auth-users.caddy:/etc/caddy/basic-auth-users.caddy:ro
       - caddy-data:/data
       - caddy-config:/config
     depends_on:

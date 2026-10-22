@@ -80,8 +80,10 @@ jobs:
           BASIC_AUTH_USER: clinic
           BASIC_AUTH_HASH: $2a$14$Zkx19XLiW6VYouLHR5NmfOFU0z2GTNmpkT/5qqR7hx4IjWJPDhjvG
         run: |
+          printf 'test-user %s\n' "$BASIC_AUTH_HASH" > "$RUNNER_TEMP/basic-auth-users.caddy"
           docker run --rm \
             -v "$PWD/deploy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            -v "$RUNNER_TEMP/basic-auth-users.caddy:/etc/caddy/basic-auth-users.caddy:ro" \
             -e APP_DOMAIN -e ACME_EMAIL -e BASIC_AUTH_USER -e BASIC_AUTH_HASH \
             caddy:2.10-alpine caddy adapt --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null
       - name: Check backend Docker image
