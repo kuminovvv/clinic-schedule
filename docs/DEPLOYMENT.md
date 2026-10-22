@@ -79,6 +79,24 @@ on the 4 GB VPS.** Routine deployment requires no SSH login by the developer.
 
 ## Deploy a release
 
+For a **new demo VPS only**, the repository includes
+`deploy/scripts/bootstrap-demo.sh`, which creates the server `.env`, a strong
+database password and a Caddy bcrypt hash without transmitting credentials
+through the terminal output or storing them in Git. After Docker and the
+`clinic-deploy` account are configured, copy the script to the VPS and run as
+`clinic-deploy`:
+
+```sh
+bash bootstrap-demo.sh clinic.82-114-226-100.sslip.io you@example.com demo
+```
+
+The generated one-time demo login is stored only in
+`/opt/clinic-schedule/demo-access.txt` (mode 0600). Obtain it through a secure
+channel and do not forward database credentials to demo users. **Do not** run
+the script on an existing production installation: it refuses to overwrite
+the existing `.env` or demo credentials. The free sslip.io hostname is for
+testing only; use your own domain for a long-lived deployment.
+
 Run locally **after the code is committed and pushed**:
 
 ```sh
