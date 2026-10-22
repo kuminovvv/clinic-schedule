@@ -1,0 +1,26 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$APP_DOMAIN} {
+    encode zstd gzip
+
+    # Clinic Schedule has no built-in user accounts yet. Protect all routes,
+    # including /api/backend, with authentication at the edge.
+    basic_auth {
+        {$BASIC_AUTH_USER} {$BASIC_AUTH_HASH}
+    }
+
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Frame-Options DENY
+        -Server
+    }
+
+    reverse_proxy frontend:3000 {
+        # The proxy authenticates clients; do not forward their login password
+        # to the application container as an Authorization header.
+        header_up -Authorization
+    }
+}

@@ -68,13 +68,28 @@ func createSchedule(day time.Time, input []scheduleTask, procedures map[string]p
 	})
 
 	appointments := make([]appointment, 0, len(input))
-	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 9, 0, 0, 0, time.Local)
-	lunchStart := time.Date(day.Year(), day.Month(), day.Day(), 13, 0, 0, 0, time.Local)
-	lunchEnd := time.Date(day.Year(), day.Month(), day.Day(), 14, 0, 0, 0, time.Local)
-	workEnd := time.Date(day.Year(), day.Month(), day.Day(), 16, 0, 0, 0, time.Local)
+	workingDay := settings.dayAt(day)
+	if !workingDay.Open {
+		unscheduledPatients := make([]int, 0, len(bundles))
+		for _, bundle := range bundles {
+			unscheduledPatients = append(unscheduledPatients, bundle.patient)
+		}
+		return scheduleResponse{Appointments: []appointment{}, UnscheduledCount: len(input), UnscheduledPatients: unscheduledPatients}, nil
+	}
+	workStartMinutes, _ := minutesFromClock(workingDay.Start)
+	workEndMinutes, _ := minutesFromClock(workingDay.End)
+	dayStart := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local).Add(time.Duration(workStartMinutes) * time.Minute)
+	workEnd := time.Date(day.Year(), day.Month(), day.Day(), 0, 0, 0, 0, time.Local).Add(time.Duration(workEndMinutes) * time.Minute)
+	blocks := make([]timeSlot, 0, len(workingDay.Breaks))
+	for _, b := range workingDay.Breaks {
+		begin, _ := minutesFromClock(b.Start)
+		finish, _ := minutesFromClock(b.End)
+		blocks = append(blocks, timeSlot{start: dayStart.Add(time.Duration(begin-workStartMinutes) * time.Minute), end: dayStart.Add(time.Duration(finish-workStartMinutes) * time.Minute)})
+	}
+	sort.Slice(blocks, func(i, j int) bool { return blocks[i].start.Before(blocks[j].start) })
 	unscheduled := make([]int, 0)
 	for _, bundle := range bundles {
-		slots := findPatientSlots(dayStart, lunchStart, lunchEnd, workEnd, bundle.tasks, occupied, stepMinutes, bundle.patient)
+		slots := findPatientSlots(dayStart, workEnd, blocks, bundle.tasks, occupied, stepMinutes, bundle.patient)
 		for index, task := range bundle.tasks {
 			if index >= len(slots) {
 				unscheduled = append(unscheduled, bundle.patient)
@@ -91,43 +106,49 @@ func createSchedule(day time.Time, input []scheduleTask, procedures map[string]p
 				color = "teal"
 			}
 			patient := task.patient
-			appointments = append(appointments, appointment{ID: id, Title: fmt.Sprintf("Пациент %d · %s", patient, task.procedure.Name), StartAt: start.Format("2006-01-02T15:04"), EndAt: end.Format("2006-01-02T15:04"), Description: fmt.Sprintf("%d мин", task.procedure.DurationMinutes), Color: color, Status: "scheduled", GeneratedByPlanner: true, PatientNumber: &patient, ProcedureID: task.procedure.ID})
+			appointments = append(appointments, appointment{ID: id, Title: fmt.Sprintf("Пациент %d · %s", patient, task.procedure.Name), StartAt: start.Format("2006-01-02T15:04"), EndAt: end.Format("2006-01-02T15:04"), Description: fmt.Sprintf("%d мин + %d мин подготовка", task.procedure.DurationMinutes, task.procedure.PreparationMinutes), Color: color, Status: "scheduled", GeneratedByPlanner: true, PatientNumber: &patient, ProcedureID: task.procedure.ID})
 		}
 	}
 	return scheduleResponse{Appointments: appointments, ScheduledCount: len(appointments), UnscheduledCount: len(unscheduled), UnscheduledPatients: uniqueInts(unscheduled)}, nil
 }
 
-func findPatientSlots(dayStart, lunchStart, lunchEnd, workEnd time.Time, tasks []scheduledTask, occupied []timeSlot, stepMinutes, patient int) []timeSlot {
+func findPatientSlots(dayStart, workEnd time.Time, blocks []timeSlot, tasks []scheduledTask, occupied []timeSlot, stepMinutes, patient int) []timeSlot {
 	var bestSlots []timeSlot
 	for candidate := roundUpToStep(dayStart, dayStart, stepMinutes); candidate.Before(workEnd); candidate = candidate.Add(time.Duration(stepMinutes) * time.Minute) {
 		cursor := candidate
+		shiftedForOccupied := false
 		slots := make([]timeSlot, 0, len(tasks))
 		for _, task := range tasks {
-			duration := time.Duration(task.procedure.DurationMinutes) * time.Minute
-			if cursor.Before(lunchEnd) && !cursor.Before(lunchStart) {
-				cursor = lunchEnd
-			}
-			if cursor.Before(lunchStart) && cursor.Add(duration).After(lunchStart) {
-				cursor = lunchEnd
-			}
-			if cursor.Add(duration).After(workEnd) {
-				break
-			}
+			duration := time.Duration(task.procedure.DurationMinutes+task.procedure.PreparationMinutes) * time.Minute
+			// A conflict later in the patient's course must move just this session,
+			// rather than discard sessions that already fit before it. Check all
+			// closures again after each move, since an occupied slot can end inside
+			// a recurring closure (or another occupied slot).
 			for {
-				var conflict *timeSlot
-				for index := range occupied {
-					if (occupied[index].patient == nil || *occupied[index].patient == patient) && cursor.Before(occupied[index].end) && cursor.Add(duration).After(occupied[index].start) &&
-						(conflict == nil || occupied[index].end.Before(conflict.end)) {
-						conflict = &occupied[index]
-					}
-				}
-				if conflict == nil {
+				if cursor.Add(duration).After(workEnd) {
 					break
 				}
-				slots = nil
-				break
+				var conflictEnd time.Time
+				conflictWasOccupied := false
+				for _, block := range blocks {
+					if cursor.Before(block.end) && cursor.Add(duration).After(block.start) && (conflictEnd.IsZero() || block.end.Before(conflictEnd)) {
+						conflictEnd = block.end
+					}
+				}
+				for _, slot := range occupied {
+					if (slot.patient == nil || *slot.patient == patient) && cursor.Before(slot.end) && cursor.Add(duration).After(slot.start) &&
+						(conflictEnd.IsZero() || slot.end.Before(conflictEnd)) {
+						conflictEnd = slot.end
+						conflictWasOccupied = true
+					}
+				}
+				if conflictEnd.IsZero() {
+					break
+				}
+				shiftedForOccupied = shiftedForOccupied || conflictWasOccupied
+				cursor = roundUpToStep(conflictEnd, dayStart, stepMinutes)
 			}
-			if slots == nil || cursor.Add(duration).After(workEnd) {
+			if cursor.Add(duration).After(workEnd) {
 				break
 			}
 			slot := timeSlot{start: cursor, end: cursor.Add(duration)}
@@ -136,9 +157,12 @@ func findPatientSlots(dayStart, lunchStart, lunchEnd, workEnd time.Time, tasks [
 		}
 		if len(slots) > len(bestSlots) {
 			bestSlots = slots
-			if len(slots) == len(tasks) {
-				break
-			}
+		}
+		// Keep the patient's procedures together when a candidate exists that
+		// avoids waiting for another appointment. Scheduled closures such as
+		// lunch are unavoidable, and do not prevent choosing an early start.
+		if len(slots) == len(tasks) && !shiftedForOccupied {
+			return slots
 		}
 	}
 	return bestSlots
@@ -149,6 +173,9 @@ func findPatientSlots(dayStart, lunchStart, lunchEnd, workEnd time.Time, tasks [
 func createWeeklySchedule(weekStart time.Time, input []scheduleTask, procedures map[string]procedure, settings settings, occupied []timeSlot) (scheduleResponse, error) {
 	remaining := append([]scheduleTask(nil), input...)
 	sort.SliceStable(remaining, func(i, j int) bool {
+		if severityRank(remaining[i].Severity) != severityRank(remaining[j].Severity) {
+			return severityRank(remaining[i].Severity) < severityRank(remaining[j].Severity)
+		}
 		if remaining[i].PatientNumber != remaining[j].PatientNumber {
 			return remaining[i].PatientNumber < remaining[j].PatientNumber
 		}

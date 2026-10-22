@@ -36,15 +36,17 @@ type procedure struct {
 	ID                 string `json:"id"`
 	Name               string `json:"name"`
 	DurationMinutes    int    `json:"durationMinutes"`
+	PreparationMinutes int    `json:"preparationMinutes"`
 	IsRelaxing         bool   `json:"isRelaxing"`
 	MinIntervalDays    int    `json:"minIntervalDays"`
 	DefaultWeeklyCount int    `json:"defaultWeeklyCount"`
 }
 
 type settings struct {
-	TimeStepMinutes  int `json:"timeStepMinutes"`
-	DisplayStartHour int `json:"displayStartHour"`
-	DisplayEndHour   int `json:"displayEndHour"`
+	TimeStepMinutes  int          `json:"timeStepMinutes"`
+	DisplayStartHour int          `json:"displayStartHour"`
+	DisplayEndHour   int          `json:"displayEndHour"`
+	WorkWeek         []workingDay `json:"workWeek"`
 }
 
 type scheduleTask struct {
@@ -135,7 +137,10 @@ func main() {
 	mux.HandleFunc("GET /v1/calendar-settings", api.getSettings)
 	mux.HandleFunc("PUT /v1/calendar-settings", api.saveSettings)
 	mux.HandleFunc("POST /v1/schedules/generate", api.generate)
+	mux.HandleFunc("DELETE /v1/schedules", api.clearSchedules)
 	mux.HandleFunc("GET /v1/schedule-report", api.getScheduleReport)
+	mux.HandleFunc("GET /v1/patient-absences", api.listPatientAbsences)
+	mux.HandleFunc("POST /v1/patient-absences", api.savePatientAbsence)
 	address := os.Getenv("LISTEN_ADDR")
 	if address == "" {
 		address = "127.0.0.1:8080"
@@ -212,7 +217,7 @@ func seedProcedures(ctx context.Context, db *pgxpool.Pool) error {
 		return nil
 	}
 	for i := 1; i <= 20; i++ {
-		_, err := db.Exec(ctx, "INSERT INTO procedures (id, name, duration_minutes) VALUES ($1, $2, 50) ON CONFLICT (id) DO NOTHING", fmt.Sprintf("procedure-%d", i), fmt.Sprintf("Процедура %d", i))
+		_, err := db.Exec(ctx, "INSERT INTO procedures (id, name, duration_minutes, preparation_minutes) VALUES ($1, $2, 30, 20) ON CONFLICT (id) DO NOTHING", fmt.Sprintf("procedure-%d", i), fmt.Sprintf("Процедура %d", i))
 		if err != nil {
 			return err
 		}
@@ -287,6 +292,17 @@ func (s *server) saveAppointment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not lock appointment day")
 		return
 	}
+	if item.Status != "cancelled" {
+		workingHours, loadErr := loadSettings(r.Context(), tx)
+		if loadErr != nil {
+			writeError(w, 500, "could not load organization hours")
+			return
+		}
+		if !workingHours.allowsAppointment(start, end) {
+			writeError(w, http.StatusUnprocessableEntity, "appointment is outside organization hours or overlaps a closure")
+			return
+		}
+	}
 	var procedureID string
 	var sourcePlanDate string
 	err = tx.QueryRow(r.Context(), "SELECT COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),'') FROM appointments WHERE id=$1 FOR UPDATE", item.ID).Scan(&procedureID, &sourcePlanDate)
@@ -296,6 +312,17 @@ func (s *server) saveAppointment(w http.ResponseWriter, r *http.Request) {
 	}
 	item.ProcedureID = procedureID
 	item.SourcePlanDate = sourcePlanDate
+	if sourcePlanDate != "" && item.PatientNumber != nil && item.Status != "cancelled" {
+		var absent bool
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM patient_absences WHERE schedule_date=$1 AND patient_number=$2 AND $3::date BETWEEN from_date AND to_date)`, sourcePlanDate, item.PatientNumber, item.StartAt[:10]).Scan(&absent); err != nil {
+			writeError(w, 500, "could not check patient absence")
+			return
+		}
+		if absent {
+			writeError(w, http.StatusUnprocessableEntity, "patient is absent on this date")
+			return
+		}
+	}
 	if sourcePlanDate != "" && item.PatientNumber != nil && item.Status != "cancelled" {
 		var stayDays int
 		err := tx.QueryRow(r.Context(), "SELECT stay_days FROM day_plan_patients WHERE schedule_date=$1 AND patient_number=$2", sourcePlanDate, item.PatientNumber).Scan(&stayDays)
@@ -362,8 +389,56 @@ func (s *server) deleteAppointment(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// clearSchedules removes all calendar entries, patient plans and generated reports,
+// but deliberately preserves the procedure catalog and calendar preferences.
+func (s *server) clearSchedules(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Content-Type") != "application/json" {
+		writeError(w, http.StatusUnsupportedMediaType, "application/json is required")
+		return
+	}
+	var input struct {
+		Confirmation string `json:"confirmation"`
+	}
+	if !decode(w, r, &input) {
+		return
+	}
+	if input.Confirmation != "CLEAR_ALL_SCHEDULES" {
+		writeError(w, http.StatusBadRequest, "confirmation is required")
+		return
+	}
+
+	ctx := r.Context()
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not start schedule clearing")
+		return
+	}
+	defer tx.Rollback(ctx)
+
+	// Block concurrent schedule writes until the complete reset is committed.
+	if _, err = tx.Exec(ctx, "LOCK TABLE appointments, schedule_reports, day_plans, day_plan_patients, day_plan_items, patient_absences IN ACCESS EXCLUSIVE MODE"); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not lock schedules")
+		return
+	}
+	for _, statement := range []string{
+		"DELETE FROM appointments",
+		"DELETE FROM schedule_reports",
+		"DELETE FROM day_plans", // Cascades to day_plan_patients and day_plan_items.
+	} {
+		if _, err = tx.Exec(ctx, statement); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not clear schedules")
+			return
+		}
+	}
+	if err = tx.Commit(ctx); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not commit schedule clearing")
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (s *server) listProcedures(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), "SELECT id,name,duration_minutes,is_relaxing,min_interval_days,default_weekly_count FROM procedures ORDER BY id")
+	rows, err := s.db.Query(r.Context(), "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count FROM procedures ORDER BY id")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load procedures")
 		return
@@ -372,7 +447,7 @@ func (s *server) listProcedures(w http.ResponseWriter, r *http.Request) {
 	items := make([]procedure, 0)
 	for rows.Next() {
 		var item procedure
-		if err := rows.Scan(&item.ID, &item.Name, &item.DurationMinutes, &item.IsRelaxing, &item.MinIntervalDays, &item.DefaultWeeklyCount); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.DurationMinutes, &item.PreparationMinutes, &item.IsRelaxing, &item.MinIntervalDays, &item.DefaultWeeklyCount); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not decode procedures")
 			return
 		}
@@ -401,11 +476,11 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	for _, item := range items {
-		if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Name) == "" || len([]rune(item.Name)) > 480 || item.DurationMinutes < 1 || item.DurationMinutes > 420 || item.MinIntervalDays < 1 || item.MinIntervalDays > 365 || item.DefaultWeeklyCount < 1 || item.DefaultWeeklyCount > 7 {
+		if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Name) == "" || len([]rune(item.Name)) > 480 || item.DurationMinutes < 1 || item.DurationMinutes > 420 || item.PreparationMinutes < 0 || item.PreparationMinutes > 419 || item.DurationMinutes+item.PreparationMinutes > 420 || item.MinIntervalDays < 1 || item.MinIntervalDays > 365 || item.DefaultWeeklyCount < 1 || item.DefaultWeeklyCount > 7 {
 			writeError(w, 400, "invalid procedure")
 			return
 		}
-		_, err = tx.Exec(r.Context(), "INSERT INTO procedures (id,name,duration_minutes,is_relaxing,min_interval_days,default_weekly_count) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,duration_minutes=EXCLUDED.duration_minutes,is_relaxing=EXCLUDED.is_relaxing,min_interval_days=EXCLUDED.min_interval_days,default_weekly_count=EXCLUDED.default_weekly_count,updated_at=now()", item.ID, strings.TrimSpace(item.Name), item.DurationMinutes, item.IsRelaxing, item.MinIntervalDays, item.DefaultWeeklyCount)
+		_, err = tx.Exec(r.Context(), "INSERT INTO procedures (id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,duration_minutes=EXCLUDED.duration_minutes,preparation_minutes=EXCLUDED.preparation_minutes,is_relaxing=EXCLUDED.is_relaxing,min_interval_days=EXCLUDED.min_interval_days,default_weekly_count=EXCLUDED.default_weekly_count,updated_at=now()", item.ID, strings.TrimSpace(item.Name), item.DurationMinutes, item.PreparationMinutes, item.IsRelaxing, item.MinIntervalDays, item.DefaultWeeklyCount)
 		if err != nil {
 			writeError(w, 500, "could not save procedures")
 			return
@@ -561,6 +636,19 @@ func (s *server) saveDayPlan(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]string{"error": "patient plan changed; reload before saving"})
 		return
 	}
+	// Existing absences must remain within the course when its length is edited.
+	for _, patient := range plan.Plans {
+		var incompatible bool
+		if err := tx.QueryRow(r.Context(), `SELECT EXISTS(SELECT 1 FROM patient_absences
+			WHERE schedule_date=$1 AND patient_number=$2 AND to_date >= ($3::date + $4::integer))`, plan.Date, patient.PatientNumber, plan.Date, patient.StayDays).Scan(&incompatible); err != nil {
+			writeError(w, 500, "could not validate existing absences")
+			return
+		}
+		if incompatible {
+			writeError(w, http.StatusUnprocessableEntity, "patient stay cannot end before an existing absence; update the absence first")
+			return
+		}
+	}
 	procedureIDList := make([]string, 0, len(procedureIDs))
 	for procedureID := range procedureIDs {
 		procedureIDList = append(procedureIDList, procedureID)
@@ -576,13 +664,16 @@ func (s *server) saveDayPlan(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not save patient plan")
 		return
 	}
-	if _, err = tx.Exec(r.Context(), "DELETE FROM day_plan_patients WHERE schedule_date=$1", day); err != nil {
-		writeError(w, http.StatusInternalServerError, "could not replace patient plans")
-		return
-	}
 	for _, patient := range plan.Plans {
-		if _, err = tx.Exec(r.Context(), "INSERT INTO day_plan_patients(schedule_date,patient_number,severity,stay_days) VALUES($1,$2,$3,$4)", day, patient.PatientNumber, patient.Severity, patient.StayDays); err != nil {
+		// Update patients in place. Deleting and reinserting the whole plan would
+		// cascade-delete absences for patients who remain in treatment.
+		if _, err = tx.Exec(r.Context(), `INSERT INTO day_plan_patients(schedule_date,patient_number,severity,stay_days) VALUES($1,$2,$3,$4)
+			ON CONFLICT(schedule_date,patient_number) DO UPDATE SET severity=EXCLUDED.severity,stay_days=EXCLUDED.stay_days`, day, patient.PatientNumber, patient.Severity, patient.StayDays); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not save patient")
+			return
+		}
+		if _, err = tx.Exec(r.Context(), "DELETE FROM day_plan_items WHERE schedule_date=$1 AND patient_number=$2", day, patient.PatientNumber); err != nil {
+			writeError(w, 500, "could not replace patient procedures")
 			return
 		}
 		for index, procedureID := range patient.ProcedureIDs {
@@ -592,6 +683,14 @@ func (s *server) saveDayPlan(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	patientNumbers := make([]int, 0, len(plan.Plans))
+	for _, patient := range plan.Plans {
+		patientNumbers = append(patientNumbers, patient.PatientNumber)
+	}
+	if _, err = tx.Exec(r.Context(), "DELETE FROM day_plan_patients WHERE schedule_date=$1 AND NOT (patient_number=ANY($2::integer[]))", plan.Date, patientNumbers); err != nil {
+		writeError(w, 500, "could not reconcile patient plans")
+		return
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusConflict, "patient plan changed concurrently")
 		return
@@ -600,8 +699,7 @@ func (s *server) saveDayPlan(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) getSettings(w http.ResponseWriter, r *http.Request) {
-	var value settings
-	err := s.db.QueryRow(r.Context(), "SELECT time_step_minutes,display_start_hour,display_end_hour FROM calendar_settings WHERE id=1").Scan(&value.TimeStepMinutes, &value.DisplayStartHour, &value.DisplayEndHour)
+	value, err := loadSettings(r.Context(), s.db)
 	if err != nil {
 		writeError(w, 500, "could not load settings")
 		return
@@ -614,11 +712,16 @@ func (s *server) saveSettings(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &value) {
 		return
 	}
-	if (value.TimeStepMinutes != 5 && value.TimeStepMinutes != 10 && value.TimeStepMinutes != 15 && value.TimeStepMinutes != 30) || value.DisplayStartHour < 0 || value.DisplayStartHour > 23 || value.DisplayEndHour <= value.DisplayStartHour || value.DisplayEndHour > 24 {
+	if (value.TimeStepMinutes != 5 && value.TimeStepMinutes != 10 && value.TimeStepMinutes != 15 && value.TimeStepMinutes != 30) || value.DisplayStartHour < 0 || value.DisplayStartHour > 23 || value.DisplayEndHour <= value.DisplayStartHour || value.DisplayEndHour > 24 || !validWorkWeek(value.WorkWeek) {
 		writeError(w, 400, "invalid calendar settings")
 		return
 	}
-	_, err := s.db.Exec(r.Context(), "UPDATE calendar_settings SET time_step_minutes=$1,display_start_hour=$2,display_end_hour=$3 WHERE id=1", value.TimeStepMinutes, value.DisplayStartHour, value.DisplayEndHour)
+	weekJSON, err := json.Marshal(value.WorkWeek)
+	if err != nil {
+		writeError(w, 400, "invalid work week")
+		return
+	}
+	_, err = s.db.Exec(r.Context(), "UPDATE calendar_settings SET time_step_minutes=$1,display_start_hour=$2,display_end_hour=$3,work_week=$4::jsonb WHERE id=1", value.TimeStepMinutes, value.DisplayStartHour, value.DisplayEndHour, string(weekJSON))
 	if err != nil {
 		writeError(w, 500, "could not save settings")
 		return
@@ -648,9 +751,11 @@ func writeError(w http.ResponseWriter, status int, message string) {
 func validAppointment(item appointment) bool {
 	start, err1 := time.Parse("2006-01-02T15:04", item.StartAt)
 	end, err2 := time.Parse("2006-01-02T15:04", item.EndAt)
-	startMinutes := start.Hour()*60 + start.Minute()
-	endMinutes := end.Hour()*60 + end.Minute()
-	return item.ID != "" && strings.TrimSpace(item.Title) != "" && len([]rune(item.Title)) <= 512 && err1 == nil && err2 == nil && start.Before(end) && start.Format("2006-01-02") == end.Format("2006-01-02") && startMinutes >= 9*60 && endMinutes <= 16*60 && !(startMinutes < 14*60 && endMinutes > 13*60) && validColor(item.Color) && (item.Status == "" || item.Status == "scheduled" || item.Status == "cancelled") && len([]rune(item.Description)) <= 1000
+	if err1 != nil || err2 != nil {
+		return false
+	}
+	endsAtMidnight := end.Equal(start.Truncate(24*time.Hour).AddDate(0, 0, 1))
+	return item.ID != "" && strings.TrimSpace(item.Title) != "" && len([]rune(item.Title)) <= 512 && start.Before(end) && (sameCalendarDate(start, end) || endsAtMidnight) && validColor(item.Color) && (item.Status == "" || item.Status == "scheduled" || item.Status == "cancelled") && len([]rune(item.Description)) <= 1000
 }
 func validColor(color string) bool {
 	return color == "blue" || color == "teal" || color == "orange" || color == "purple"
@@ -716,7 +821,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	occupiedRows.Close()
-	rows, err := tx.Query(ctx, "SELECT id,name,duration_minutes,is_relaxing,min_interval_days,default_weekly_count FROM procedures")
+	rows, err := tx.Query(ctx, "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count FROM procedures")
 	if err != nil {
 		writeError(w, 500, "could not load procedures")
 		return
@@ -724,7 +829,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 	procedureMap := map[string]procedure{}
 	for rows.Next() {
 		var p procedure
-		if err = rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount); err != nil {
+		if err = rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.PreparationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount); err != nil {
 			rows.Close()
 			writeError(w, 500, "could not load procedures")
 			return
@@ -743,6 +848,11 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	warnings := courseWarnings(plan.Plans, procedureMap)
+	absences, err := loadAbsenceDays(ctx, tx, input.Date)
+	if err != nil {
+		writeError(w, 500, "could not load patient absences")
+		return
+	}
 	protectedRows, err := tx.Query(ctx, `SELECT id,patient_number,title,source_procedure_id FROM appointments
 		WHERE generated_by_planner AND manually_modified AND status='scheduled'
 		AND (source_plan_date=$1 OR (source_plan_date IS NULL AND start_at >= $1 AND start_at < $2))`, day, day.AddDate(0, 0, 1))
@@ -822,12 +932,12 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		}
 		patient.ProcedureIDs = active
 	}
-	settingsValue := settings{TimeStepMinutes: 10, DisplayStartHour: 9, DisplayEndHour: 16}
-	if err := tx.QueryRow(ctx, "SELECT time_step_minutes FROM calendar_settings WHERE id=1").Scan(&settingsValue.TimeStepMinutes); err != nil {
+	settingsValue, err := loadSettings(ctx, tx)
+	if err != nil {
 		writeError(w, 500, "could not load calendar settings")
 		return
 	}
-	result, err := createCourseSchedule(day, remainingPlans, procedureMap, settingsValue, occupied)
+	result, err := createCourseScheduleWithAbsences(day, remainingPlans, procedureMap, settingsValue, occupied, absences)
 	if err != nil {
 		writeError(w, 400, err.Error())
 		return

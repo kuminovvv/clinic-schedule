@@ -1,14 +1,14 @@
 "use client"
 
-import { useEffect, useState, type FormEvent } from "react"
+import { useState, type FormEvent } from "react"
 import { Cancel01StrokeRoundedIcon as X } from "@/shared/lib/icons"
 import type {
   Appointment,
   AppointmentColor,
   AppointmentInput,
 } from "@/entities/appointment"
-import type {TimeStepMinutes} from "@/entities/calendar-settings"
-import { formatDateTimeLocal, LUNCH_END_HOUR, LUNCH_START_HOUR, WORKDAY_END_HOUR, WORKDAY_START_HOUR } from "@/shared/lib/calendar-date"
+import {canScheduleAt, type WorkDay, type TimeStepMinutes} from "@/entities/calendar-settings"
+import { formatDateTimeLocal } from "@/shared/lib/calendar-date"
 import { Button } from "@/shared/ui/shadcn/button"
 import { Input } from "@/shared/ui/shadcn/input"
 import { Label } from "@/shared/ui/shadcn/label"
@@ -22,6 +22,7 @@ type AppointmentDialogProps = {
   appointment?: Appointment
   appointments: Appointment[]
   timeStepMinutes: TimeStepMinutes
+  workWeek: WorkDay[]
   initialStartAt: string
   initialEndAt?: string
   anchor?: DOMRect
@@ -37,11 +38,19 @@ const colorOptions: { value: AppointmentColor; label: string }[] = [
   { value: "purple", label: "Фиолетовый" },
 ]
 
+const getDefaultEndAt = (startAt: string, endAt: string | undefined, timeStepMinutes: TimeStepMinutes) => {
+  if (endAt) return endAt
+  const defaultEnd = new Date(startAt)
+  defaultEnd.setMinutes(defaultEnd.getMinutes() + Math.ceil(50 / timeStepMinutes) * timeStepMinutes)
+  return formatDateTimeLocal(defaultEnd)
+}
+
 export function AppointmentDialog({
   open,
   appointment,
   appointments,
   timeStepMinutes,
+  workWeek,
   initialStartAt,
   initialEndAt,
   anchor,
@@ -49,6 +58,7 @@ export function AppointmentDialog({
   onSave,
   onDelete,
 }: AppointmentDialogProps) {
+  const defaultEndAt = getDefaultEndAt(initialStartAt, initialEndAt, timeStepMinutes)
   const [title, setTitle] = useState(appointment?.title ?? "")
   const [date, setDate] = useState(
     appointment?.startAt.slice(0, 10) ?? initialStartAt.slice(0, 10),
@@ -56,26 +66,28 @@ export function AppointmentDialog({
   const [startTime, setStartTime] = useState(
     appointment?.startAt.slice(11, 16) ?? initialStartAt.slice(11, 16),
   )
-  const [endDate, setEndDate] = useState(appointment?.endAt.slice(0, 10) ?? initialStartAt.slice(0, 10))
-  const [endTime, setEndTime] = useState(appointment?.endAt.slice(11, 16) ?? initialStartAt.slice(11, 16))
+  const [endDate, setEndDate] = useState(appointment?.endAt.slice(0, 10) ?? defaultEndAt.slice(0, 10))
+  const [endTime, setEndTime] = useState(appointment?.endAt.slice(11, 16) ?? defaultEndAt.slice(11, 16))
   const [description, setDescription] = useState(appointment?.description ?? "")
   const [color, setColor] = useState<AppointmentColor>(appointment?.color ?? "blue")
   const [error, setError] = useState("")
 
-  useEffect(() => {
-    if (!open) return
-    const defaultEnd = new Date(initialStartAt)
-    defaultEnd.setMinutes(defaultEnd.getMinutes() + Math.ceil(50 / timeStepMinutes) * timeStepMinutes)
-    const defaultEndAt = initialEndAt ?? formatDateTimeLocal(defaultEnd)
-    setTitle(appointment?.title ?? "")
-    setDate(appointment?.startAt.slice(0, 10) ?? initialStartAt.slice(0, 10))
-    setStartTime(appointment?.startAt.slice(11, 16) ?? initialStartAt.slice(11, 16))
-    setEndDate(appointment?.endAt.slice(0, 10) ?? defaultEndAt.slice(0, 10))
-    setEndTime(appointment?.endAt.slice(11, 16) ?? defaultEndAt.slice(11, 16))
-    setDescription(appointment?.description ?? "")
-    setColor(appointment?.color ?? "blue")
-    setError("")
-  }, [appointment, initialEndAt, initialStartAt, open, timeStepMinutes])
+  const [previousSource, setPreviousSource] = useState({ appointment, initialEndAt, initialStartAt, open, timeStepMinutes })
+  if (previousSource.appointment !== appointment || previousSource.initialEndAt !== initialEndAt ||
+      previousSource.initialStartAt !== initialStartAt || previousSource.open !== open ||
+      previousSource.timeStepMinutes !== timeStepMinutes) {
+    setPreviousSource({ appointment, initialEndAt, initialStartAt, open, timeStepMinutes })
+    if (open) {
+      setTitle(appointment?.title ?? "")
+      setDate(appointment?.startAt.slice(0, 10) ?? initialStartAt.slice(0, 10))
+      setStartTime(appointment?.startAt.slice(11, 16) ?? initialStartAt.slice(11, 16))
+      setEndDate(appointment?.endAt.slice(0, 10) ?? defaultEndAt.slice(0, 10))
+      setEndTime(appointment?.endAt.slice(11, 16) ?? defaultEndAt.slice(11, 16))
+      setDescription(appointment?.description ?? "")
+      setColor(appointment?.color ?? "blue")
+      setError("")
+    }
+  }
 
   const handleClose = () => {
     onClose()
@@ -95,8 +107,8 @@ export function AppointmentDialog({
       setError("Выберите время, кратное шагу прилипания из настроек календаря.")
       return
     }
-    if (endDate !== date || startMinutes < WORKDAY_START_HOUR * 60 || endMinutes > WORKDAY_END_HOUR * 60 || (startMinutes < LUNCH_END_HOUR * 60 && endMinutes > LUNCH_START_HOUR * 60)) {
-      setError("Запись должна быть в рабочее время 09:00–16:00 и не пересекать обед 13:00–14:00.")
+    if (!canScheduleAt(workWeek, new Date(`${date}T${startTime}`), new Date(`${endDate}T${endTime}`))) {
+      setError("Выберите рабочий день и время без перерывов. График можно изменить в настройках календаря.")
       return
     }
     const start = new Date(`${date}T${startTime}`)

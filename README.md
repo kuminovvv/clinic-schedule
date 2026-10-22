@@ -7,6 +7,16 @@
 
 Общий docker-compose.yml расположен в корне проекта.
 
+## Production и автоматический деплой
+
+Production-версия запускается отдельным `docker-compose.prod.yml` с
+PostgreSQL, Go API, Next.js и Caddy (HTTPS + авторизация). Сборка образов
+происходит в GitHub Actions, а новый тег `vX.Y.Z` запускает SSH-деплой на VPS.
+Пошаговая первоначальная настройка сервера, секреты GitHub и резервное
+копирование описаны в [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md).
+
+Не запускайте production через `pnpm dev` и не публикуйте наружу порты БД/API.
+
 ## Запуск через Docker
 
 Из корня clinic-schedule/:

@@ -16,8 +16,7 @@ const ToastList = () => {
       toast={item}
       data-slot="toast"
       className={cn(
-        "group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom overflow-visible rounded-xl border border-border bg-popover text-popover-foreground shadow-lg outline-none",
-        item.type === "constraint" && "border-amber-300 bg-amber-50 text-amber-950",
+        "group/toast pointer-events-auto absolute right-0 bottom-0 z-[calc(1000-var(--toast-index))] w-full origin-bottom overflow-visible rounded-2xl bg-white text-slate-900 shadow-[0_12px_36px_-12px_rgba(15,23,42,0.28)] outline-none",
         "[--gap:0.75rem] [--height:var(--toast-frontmost-height,var(--toast-height))] [--offset-y:calc(var(--toast-offset-y)*-1+calc(var(--toast-index)*var(--gap)*-1)+var(--toast-swipe-movement-y))] [--peek:0.75rem] [--scale:calc(max(0,1-(var(--toast-index)*0.1)))] [--shrink:calc(1-var(--scale))]",
         "h-(--height) [transform:translateX(var(--toast-swipe-movement-x))_translateY(calc(var(--toast-swipe-movement-y)-(var(--toast-index)*var(--peek))-(var(--shrink)*var(--height))))_scale(var(--scale))]",
         "[transition:transform_500ms_cubic-bezier(0.22,1,0.36,1),opacity_500ms,height_150ms] after:absolute after:top-full after:left-0 after:h-[calc(var(--gap)+1px)] after:w-full after:content-['']",
@@ -36,17 +35,17 @@ const ToastList = () => {
           className={cn(
             "mt-1.5 size-2 shrink-0 rounded-full bg-blue-600",
             item.type === "error" && "bg-red-600",
-            item.type === "warning" && "bg-amber-600",
-            item.type === "constraint" && "bg-amber-600",
+            item.type === "warning" && "bg-amber-500",
+            item.type === "constraint" && "bg-blue-500",
             item.type === "success" && "bg-emerald-600",
           )}
         />
         <div className="min-w-0 flex-1 space-y-1">
           <ToastPrimitive.Title className="text-base font-semibold leading-6"/>
-          <ToastPrimitive.Description className={cn("max-h-56 overflow-y-auto whitespace-pre-line text-[15px] leading-6 text-muted-foreground", item.type === "constraint" && "text-amber-950/85")}/>
+          <ToastPrimitive.Description className="max-h-56 overflow-y-auto whitespace-pre-line text-[15px] leading-6 text-slate-600"/>
           {item.actionProps && (
             <ToastPrimitive.Action
-              className="mt-3 min-h-10 rounded-lg bg-amber-900 px-4 text-sm font-medium text-white hover:bg-amber-950 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-800"
+              className="mt-3 min-h-10 rounded-lg bg-slate-900 px-4 text-sm font-medium text-white hover:bg-slate-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-slate-700"
             />
           )}
         </div>

@@ -1,6 +1,6 @@
 import {
-  ArrowLeft01StrokeRoundedIcon as ChevronLeft,
-  ArrowRight01StrokeRoundedIcon as ChevronRight,
+  ArrowLeft01StandardIcon as ChevronLeft,
+  ArrowRight01StandardIcon as ChevronRight,
   Add01StrokeRoundedIcon as Plus,
 } from "@/shared/lib/icons"
 import { Button } from "@/shared/ui/shadcn/button"
@@ -11,6 +11,8 @@ type CalendarToolbarProps = {
   onMoveWeek: (offset: number) => void
   onToday: () => void
   onCreate: () => void
+  onClearSchedule: () => void
+  isClearingSchedule: boolean
   patientNumbers: number[]
   selectedPatientNumber: number | null
   onSelectPatient: (patientNumber: number | null) => void
@@ -22,7 +24,7 @@ const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   month: "long",
 })
 
-export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, patientNumbers, selectedPatientNumber, onSelectPatient }: CalendarToolbarProps) {
+export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSchedule, isClearingSchedule, patientNumbers, selectedPatientNumber, onSelectPatient }: CalendarToolbarProps) {
   return (
     <div className="bg-white">
       <section aria-label="Управление календарём" className="flex flex-col gap-3 border-b border-slate-200 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
@@ -54,6 +56,9 @@ export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, patientNu
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
+          <Button className="h-10 rounded-xl px-3" disabled={isClearingSchedule} onClick={onClearSchedule} type="button" variant="destructive">
+            Очистить расписание
+          </Button>
           <Button className="h-10 rounded-xl bg-blue-600 px-4 text-white hover:bg-blue-700" onClick={onCreate}>
             <Plus />
             <span className="hidden sm:inline">Новая запись</span>

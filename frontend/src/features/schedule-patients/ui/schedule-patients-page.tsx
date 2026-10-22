@@ -25,28 +25,27 @@ export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Pr
             <section className="container mx-auto flex min-h-0 w-full flex-1 flex-col">
 
                 <div
-                    className="mb-4 flex shrink-0 flex-wrap items-center justify-between gap-3 bg-white p-2 rounded-[20px]">
-                    <nav aria-label="Раздел страницы" className="flex flex-wrap gap-2">
-                            <Button
-                            aria-current={view === "patients" ? "page" : undefined}
-                            className="rounded-[16px]"
-                            nativeButton={false}
-                            render={<Link href={"/schedule/patients?date=" + dateKey}/>}
-                            variant={view === "patients" ? "secondary" : "outline"}
-                        >
-                            Пациенты
-                        </Button>
-                        <Button
-                            aria-current={view === "procedures" ? "page" : undefined}
-                            className="rounded-[16px]"
-                            nativeButton={false}
-                            render={<Link href={"/schedule/procedures?date=" + dateKey}/>}
-                            variant={view === "procedures" ? "secondary" : "outline"}
-                        >
-                            Каталог процедур
-                        </Button>
+                    className="mb-4 flex shrink-0 flex-col gap-3 rounded-[20px] bg-white p-2 sm:flex-row sm:items-center sm:justify-between">
+                    <nav aria-label="Раздел расписания" className="grid w-full grid-cols-2 gap-1 rounded-[16px] bg-slate-100 p-1 sm:inline-flex sm:w-auto">
+                        {([
+                            {key: "patients", label: "Пациенты", href: `/schedule/patients?date=${dateKey}`},
+                            {key: "procedures", label: "Каталог процедур", href: `/schedule/procedures?date=${dateKey}`},
+                        ] as const).map(({key, label, href}) => (
+                            <Link
+                                key={key}
+                                href={href}
+                                aria-current={view === key ? "page" : undefined}
+                                className={`flex h-10 min-w-0 items-center justify-center rounded-xl px-3 text-center text-[13px] font-medium transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:px-5 sm:text-sm ${
+                                    view === key
+                                        ? "bg-blue-600 text-white shadow-sm"
+                                        : "text-slate-600 hover:bg-white hover:text-slate-900 active:bg-slate-200"
+                                }`}
+                            >
+                                {label}
+                            </Link>
+                        ))}
                     </nav>
-                    <div className="ml-auto flex items-center gap-2">
+                    <div className="flex items-center justify-end gap-2 sm:ml-auto">
                         {view === "patients" && (
                             <Button className="rounded-xl bg-blue-600 px-4 text-white hover:bg-blue-700"
                                 disabled={!plans.some((plan) => plan.procedureIds.length) || !validProcedures || !validPlans || planConflict || isGenerating}

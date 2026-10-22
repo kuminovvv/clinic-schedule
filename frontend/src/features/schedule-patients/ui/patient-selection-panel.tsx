@@ -1,5 +1,6 @@
 "use client"
 
+import {Fragment} from "react"
 import type {PatientPlan, Severity} from "../model/types"
 import type {Procedure} from "@/entities/procedure"
 import {Add01StrokeRoundedIcon as Plus, Cancel01StrokeRoundedIcon as X} from "@/shared/lib/icons"
@@ -8,15 +9,10 @@ import {Label} from "@/shared/ui/shadcn/label"
 import {Input} from "@/shared/ui/shadcn/input"
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@/shared/ui/shadcn/select"
 import {Switch} from "@/shared/ui/shadcn/switch"
+import {StayDurationControl} from "./stay-duration-control"
+import {PatientAbsenceControl} from "./patient-absence-control"
 
 const severityLabels: Record<Severity, string> = {high: "Высокая", medium: "Средняя", low: "Низкая"}
-
-const calendarMonthDays = (dateKey: string) => {
-  const [year, month, day] = dateKey.split("-").map(Number)
-  const lastDayOfNextMonth = new Date(Date.UTC(year, month + 1, 0)).getUTCDate()
-  const end = Date.UTC(year, month, Math.min(day, lastDayOfNextMonth))
-  return Math.round((end - Date.UTC(year, month - 1, day)) / 86_400_000)
-}
 
 type PatientSelectionPanelProps = {
   admissionDateKey: string
@@ -34,7 +30,6 @@ type PatientSelectionPanelProps = {
 
 export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, selectedPatientNumber, onSelectPatientAction, onAddPatientAction, onRemovePatientAction, onChangeSeverityAction, onChangeStayAction, onChangeProcedureCountAction, onToggleProcedureAction}: PatientSelectionPanelProps) => {
   const selectedPlan = plans.find((plan) => plan.patientNumber === selectedPatientNumber)
-  const oneMonthDays = calendarMonthDays(admissionDateKey)
   return (
     <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)] lg:grid-rows-1">
       <aside aria-label="Список пациентов" className="flex min-h-0 flex-col rounded-[20px] bg-white p-3">
@@ -64,16 +59,14 @@ export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, sele
         </div>
       </aside>
       <section aria-label="Назначение процедур" className="flex min-h-0 min-w-0 flex-col rounded-[20px] bg-white p-3 sm:p-4">
-        {selectedPlan ? <>
+        {selectedPlan ? <Fragment key={selectedPlan.patientNumber}>
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2"><h2 className="text-sm font-semibold">Процедуры пациента {selectedPlan.patientNumber}</h2><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">Выбрано: {selectedPlan.procedureIds.length} видов</span></div>
-          <div className="mb-3 flex flex-wrap items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm">
-            <Label className="font-medium text-slate-700" htmlFor="stay-days">Срок пребывания, дней</Label>
-            <Input id="stay-days" className="h-9 w-20" aria-label="Срок пребывания пациента в днях" min={1} max={365} step={1} type="number" value={selectedPlan.stayDays} onChange={(event) => onChangeStayAction(selectedPlan.patientNumber, Number(event.target.value))}/>
-            <Select value={String(selectedPlan.stayDays)} onValueChange={(value) => value && onChangeStayAction(selectedPlan.patientNumber, Number(value))}>
-              <SelectTrigger aria-label="Быстрый выбор срока пребывания" className="h-9 w-40 rounded-md"><SelectValue>{selectedPlan.stayDays === 1 ? "1 день" : selectedPlan.stayDays === 7 ? "1 неделя" : selectedPlan.stayDays === oneMonthDays ? "1 месяц" : "Свой срок"}</SelectValue></SelectTrigger>
-              <SelectContent><SelectItem value="1">1 день</SelectItem><SelectItem value="7">1 неделя</SelectItem><SelectItem value={String(oneMonthDays)}>1 календарный месяц ({oneMonthDays} дн.)</SelectItem></SelectContent>
-            </Select>
-          </div>
+          <StayDurationControl
+            admissionDateKey={admissionDateKey}
+            stayDays={selectedPlan.stayDays}
+            onChange={(days) => onChangeStayAction(selectedPlan.patientNumber, days)}
+          />
+          <PatientAbsenceControl dateKey={admissionDateKey} patientNumber={selectedPlan.patientNumber} stayDays={selectedPlan.stayDays}/>
           <div className="max-h-[40vh] overflow-y-auto rounded-lg border border-slate-100 p-2 lg:min-h-0 lg:max-h-none lg:flex-1">
             {procedures.length ? <div className="grid gap-2 xl:grid-cols-2">{procedures.map((procedure) => {
               const selected = selectedPlan.procedureIds.includes(procedure.id)
@@ -83,7 +76,7 @@ export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, sele
               return <div className="min-w-0 rounded-lg border border-slate-100 px-2 py-2 text-sm text-slate-700 hover:bg-slate-50" key={procedure.id}>
                 <div className="flex min-w-0 items-center gap-2">
                   <Switch aria-label={`Процедура: ${procedure.name}`} checked={selected} onCheckedChange={(checked) => onToggleProcedureAction(procedure.id, checked)} size="sm"/>
-                  <div className="min-w-0 flex-1"><span className="block truncate font-medium">{procedure.name}</span><span className="block text-xs text-slate-500">{procedure.durationMinutes} мин · минимум раз в {procedure.minIntervalDays} дн. · норма {procedure.defaultWeeklyCount}/нед.{procedure.isRelaxing ? " · расслабляющая" : ""}</span></div>
+                  <div className="min-w-0 flex-1"><span className="block truncate font-medium">{procedure.name}</span><span className="block text-xs text-slate-500">{procedure.durationMinutes + procedure.preparationMinutes} мин в расписании ({procedure.durationMinutes} + {procedure.preparationMinutes} подготовка) · интервал {procedure.minIntervalDays} дн. · {procedure.defaultWeeklyCount}/нед.{procedure.isRelaxing ? " · расслабляющая" : ""}</span></div>
                   {selected && <Label className="flex shrink-0 items-center gap-1 text-xs">Сеансов
                     <Input aria-label={`Количество сеансов: ${procedure.name}`} className="h-8 w-16 rounded-md px-2 text-sm" type="number" step={1} min={1} max={365} value={count} onChange={(event) => onChangeProcedureCountAction(selectedPlan.patientNumber, procedure.id, Number(event.target.value))}/>
                   </Label>}
@@ -93,7 +86,7 @@ export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, sele
               </div>
             })}</div> : <p className="px-3 py-8 text-center text-sm text-slate-500">В каталоге пока нет процедур. Добавьте их в разделе «Каталог процедур».</p>}
           </div>
-        </> : <div className="flex min-h-48 items-center justify-center text-center text-sm text-slate-500">Выберите пациента или добавьте нового.</div>}
+        </Fragment> : <div className="flex min-h-48 items-center justify-center text-center text-sm text-slate-500">Выберите пациента или добавьте нового.</div>}
       </section>
     </div>
   )

@@ -1,18 +1,28 @@
 import type {Metadata} from "next";
-import {Geist_Mono, Roboto_Flex} from "next/font/google";
+import localFont from "next/font/local";
 import {AppHeader} from "@/widgets/app-header/ui/app-header";
 import {Toaster} from "@/shared/ui/shadcn/toast";
 import "./globals.css";
 
-const robotoFlex = Roboto_Flex({
-    variable: "--font-roboto-flex",
-    subsets: ["latin", "cyrillic"],
+// Official Geist font files from the pinned `geist` package, bundled locally.
+// Explicit italic sources prevent the browser from synthesizing italic glyphs.
+const geistSans = localFont({
+    src: [
+        {path: "../../node_modules/geist/dist/fonts/geist-sans/Geist-Variable.woff2", style: "normal", weight: "100 900"},
+        {path: "../../node_modules/geist/dist/fonts/geist-sans/Geist-Italic[wght].woff2", style: "italic", weight: "100 900"},
+    ],
+    variable: "--font-geist-sans",
     display: "swap",
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+    src: [
+        {path: "../../node_modules/geist/dist/fonts/geist-mono/GeistMono-Variable.woff2", style: "normal", weight: "100 900"},
+        {path: "../../node_modules/geist/dist/fonts/geist-mono/GeistMono-Italic[wght].woff2", style: "italic", weight: "100 900"},
+    ],
     variable: "--font-geist-mono",
-    subsets: ["latin"],
+    display: "swap",
+    preload: false,
 });
 
 export const metadata: Metadata = {
@@ -24,7 +34,7 @@ export default function RootLayout({children}: LayoutProps<"/">) {
     return (
         <html
             lang="ru"
-            className={`${robotoFlex.variable} ${geistMono.variable} h-full antialiased`}
+            className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
         >
         <body className="min-h-full flex flex-col pt-16">
         <AppHeader/>

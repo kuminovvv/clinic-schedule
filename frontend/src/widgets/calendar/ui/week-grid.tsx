@@ -1,15 +1,11 @@
 import type {Appointment, AppointmentColor} from "@/entities/appointment"
-import type {TimeStepMinutes} from "@/entities/calendar-settings"
-import {useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject} from "react"
+import {canScheduleAt, clockMinutes, workDayForDate, type TimeStepMinutes, type WorkDay} from "@/entities/calendar-settings"
+import {useEffect, useLayoutEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject} from "react"
 import {createPortal} from "react-dom"
 import {
-    LUNCH_END_HOUR,
-    LUNCH_START_HOUR,
     formatDateKey,
     getWeekDays,
     HOUR_HEIGHT,
-    WORKDAY_END_HOUR,
-    WORKDAY_START_HOUR,
 } from "@/shared/lib/calendar-date"
 import {Button} from "@/shared/ui/shadcn/button"
 
@@ -17,7 +13,7 @@ type WeekGridProps = {
     date: Date
     selectedDay: Date
     appointments: Appointment[]
-    currentTime: Date
+    currentTime: Date | null
     onSelectTime: (date: Date, endAt: Date | undefined, anchor: DOMRect) => void
     onSelectDay: (date: Date) => void
     onSelectAppointment: (appointment: Appointment) => void
@@ -26,7 +22,7 @@ type WeekGridProps = {
     timeStepMinutes: TimeStepMinutes
     displayStartHour: number
     displayEndHour: number
-    availableHeight: number
+    workWeek: WorkDay[]
     viewportRef: RefObject<HTMLDivElement | null>
     contentRef: RefObject<HTMLDivElement | null>
 }
@@ -99,7 +95,7 @@ export function WeekGrid({
                              timeStepMinutes,
                              displayStartHour,
                              displayEndHour,
-                             availableHeight,
+                             workWeek,
                              viewportRef,
                              contentRef,
                          }: WeekGridProps) {
@@ -112,7 +108,38 @@ export function WeekGrid({
     const suppressAppointmentClick = useRef<string | null>(null)
     const selectionOrigin = useRef<{dayKey: string; minutes: number; y: number; pointerId: number} | null>(null)
     const ignoreNextSlotClick = useRef(false)
-    const hourHeight = availableHeight ? Math.max(48, availableHeight / hours.length) : HOUR_HEIGHT
+    const gridRootRef = useRef<HTMLDivElement | null>(null)
+    const headerRef = useRef<HTMLDivElement | null>(null)
+    const [visibleGridHeight, setVisibleGridHeight] = useState(0)
+
+    // The page-scroll hook controls the sticky panel, but its first measurement
+    // can precede the final flex layout. Measure the actual grid space directly
+    // so a short workday always fills the panel instead of leaving a white gap.
+    useLayoutEffect(() => {
+        const root = gridRootRef.current
+        const header = headerRef.current
+        const viewport = viewportRef.current
+        if (!root || !header || !viewport) return
+
+        const measure = () => {
+            const available = Math.max(viewport.clientHeight, root.clientHeight - header.offsetHeight)
+            setVisibleGridHeight((previous) => previous === available ? previous : available)
+        }
+        const observer = new ResizeObserver(measure)
+        observer.observe(root)
+        observer.observe(header)
+        observer.observe(viewport)
+        window.addEventListener("resize", measure)
+        measure()
+        return () => {
+            observer.disconnect()
+            window.removeEventListener("resize", measure)
+        }
+    }, [viewportRef])
+
+    const hourHeight = visibleGridHeight > 0
+        ? Math.max(48, visibleGridHeight / hours.length)
+        : HOUR_HEIGHT
 
     useEffect(() => {
         const clearTransientInteractions = () => {
@@ -142,11 +169,11 @@ export function WeekGrid({
     const days = getWeekDays(date)
     const timezone =
         new Intl.DateTimeFormat("ru-RU", {timeZoneName: "short"})
-            .formatToParts(currentTime)
+            .formatToParts(date)
             .find((part) => part.type === "timeZoneName")?.value ?? ""
-    const nowMinutes = currentTime.getHours() * 60 + currentTime.getMinutes()
+    const nowMinutes = currentTime ? currentTime.getHours() * 60 + currentTime.getMinutes() : -1
     const isCurrentTimeVisible =
-        nowMinutes >= displayStartHour * 60 && nowMinutes < displayEndHour * 60
+        currentTime !== null && nowMinutes >= displayStartHour * 60 && nowMinutes < displayEndHour * 60
     const nowTop = ((nowMinutes - displayStartHour * 60) / 60) * hourHeight
 
     const beginAppointmentGesture = (
@@ -199,6 +226,13 @@ export function WeekGrid({
         const originalDuration = originalEnd.getTime() - originalStart.getTime()
         const targetDayKey = formatDateKey(targetDay)
         const originalDayKey = formatDateKey(originalStart)
+        const originalRule = workDayForDate(workWeek, originalStart)
+        const targetRule = workDayForDate(workWeek, targetDay)
+        if (!targetRule?.open || !originalRule) {
+            dragPreviewRef.current = null
+            setDragPreview(null)
+            return
+        }
         if (move.mode !== "move" && targetDayKey !== originalDayKey) {
             dragPreviewRef.current = null
             setDragPreview(null)
@@ -215,8 +249,7 @@ export function WeekGrid({
                 .filter((item) => item.id !== appointment.id && item.status !== "cancelled" && (appointment.patientNumber == null || item.patientNumber == null || (appointment.patientNumber === item.patientNumber && (!appointment.sourcePlanDate || !item.sourcePlanDate || appointment.sourcePlanDate === item.sourcePlanDate))) && formatDateKey(new Date(item.startAt)) === originalDayKey)
                 .map((item) => new Date(item.endAt))
                 .filter((itemEnd) => itemEnd.getHours() * 60 + itemEnd.getMinutes() <= originalStartMinutes)
-            const lunchStartBound = originalEndMinutes > LUNCH_START_HOUR * 60 ? LUNCH_END_HOUR * 60 : WORKDAY_START_HOUR * 60
-            const lowerBound = Math.max(WORKDAY_START_HOUR * 60, lunchStartBound, ...previousAppointments.map((itemEnd) => itemEnd.getHours() * 60 + itemEnd.getMinutes()))
+            const lowerBound = Math.max(clockMinutes(originalRule.start), ...previousAppointments.map((itemEnd) => itemEnd.getHours() * 60 + itemEnd.getMinutes()))
             const minimumStart = Math.ceil(lowerBound / timeStepMinutes) * timeStepMinutes
             const maximumStart = Math.floor((originalEndMinutes - timeStepMinutes) / timeStepMinutes) * timeStepMinutes
             if (minimumStart > maximumStart) {
@@ -234,8 +267,7 @@ export function WeekGrid({
                 .filter((item) => item.id !== appointment.id && item.status !== "cancelled" && (appointment.patientNumber == null || item.patientNumber == null || (appointment.patientNumber === item.patientNumber && (!appointment.sourcePlanDate || !item.sourcePlanDate || appointment.sourcePlanDate === item.sourcePlanDate))) && formatDateKey(new Date(item.startAt)) === originalDayKey)
                 .map((item) => new Date(item.startAt))
                 .filter((itemStart) => itemStart.getHours() * 60 + itemStart.getMinutes() >= originalEndMinutes)
-            const lunchEndBound = originalStartMinutes < LUNCH_END_HOUR * 60 ? LUNCH_START_HOUR * 60 : WORKDAY_END_HOUR * 60
-            const upperBound = Math.min(WORKDAY_END_HOUR * 60, lunchEndBound, ...nextAppointments.map((itemStart) => itemStart.getHours() * 60 + itemStart.getMinutes()))
+            const upperBound = Math.min(clockMinutes(originalRule.end), ...nextAppointments.map((itemStart) => itemStart.getHours() * 60 + itemStart.getMinutes()))
             const minimumEnd = Math.ceil((originalStartMinutes + timeStepMinutes) / timeStepMinutes) * timeStepMinutes
             const maximumEnd = Math.floor(upperBound / timeStepMinutes) * timeStepMinutes
             if (minimumEnd > maximumEnd) {
@@ -250,12 +282,17 @@ export function WeekGrid({
             end.setHours(0, endMinutes, 0, 0)
         } else {
             const durationSteps = Math.ceil(originalDuration / (timeStepMinutes * 60_000)) * timeStepMinutes
-            const latestStart = Math.max(WORKDAY_START_HOUR * 60, WORKDAY_END_HOUR * 60 - durationSteps)
+            const latestStart = Math.max(clockMinutes(targetRule.start), clockMinutes(targetRule.end) - durationSteps)
             const snappedMinutes = Math.round(rawEdgeMinutes / timeStepMinutes) * timeStepMinutes
-            const startMinutes = Math.max(WORKDAY_START_HOUR * 60, Math.min(latestStart, snappedMinutes))
+            const startMinutes = Math.max(clockMinutes(targetRule.start), Math.min(latestStart, snappedMinutes))
             start = new Date(targetDay)
             start.setHours(0, startMinutes, 0, 0)
             end = new Date(start.getTime() + originalDuration)
+        }
+        if (!canScheduleAt(workWeek, start, end)) {
+            dragPreviewRef.current = null
+            setDragPreview(null)
+            return
         }
         const startMinutes = start.getHours() * 60 + start.getMinutes()
         const preview: DragPreview = {
@@ -298,6 +335,7 @@ export function WeekGrid({
         <>
         <div
             className="h-full overflow-x-auto overflow-y-hidden bg-white"
+            ref={gridRootRef}
             onLostPointerCapture={(event) => finishMove(event, true)}
             onPointerCancel={(event) => finishMove(event, true)}
             onPointerMove={handleMovePointer}
@@ -308,16 +346,18 @@ export function WeekGrid({
         >
             <div className="flex h-full min-w-245 flex-col">
                 <div
-                    className="sticky top-0 z-20 grid shrink-0 grid-cols-[58px_repeat(7,minmax(0,1fr))] gap-x-px border-b border-slate-200 bg-slate-200">
+                    className="sticky top-0 z-20 grid shrink-0 grid-cols-[58px_repeat(7,minmax(0,1fr))] gap-x-px border-b border-slate-200 bg-slate-200"
+                    ref={headerRef}>
                     <div
                         className="flex items-end justify-center bg-white pb-3 text-[10px] font-medium uppercase tracking-wide text-slate-400">
                         {timezone}
                     </div>
                     {days.map((day) => {
-                        const isToday = formatDateKey(day) === formatDateKey(currentTime)
+                        const isToday = currentTime !== null && formatDateKey(day) === formatDateKey(currentTime)
                         const isSelected = formatDateKey(day) === formatDateKey(selectedDay)
+                        const isClosed = !workDayForDate(workWeek, day)?.open
                         return (
-                            <div className="flex h-[76px] flex-col items-center justify-center gap-1 bg-white"
+                            <div className={`flex h-[76px] flex-col items-center justify-center gap-1 ${isClosed ? "bg-slate-100" : "bg-white"}`}
                                  key={formatDateKey(day)}>
                 <span
                     className={`text-[11px] font-medium uppercase tracking-wider ${isToday ? "text-blue-600" : "text-slate-500"}`}>
@@ -328,6 +368,7 @@ export function WeekGrid({
                                         onClick={() => onSelectDay(day)} type="button" variant="ghost">
                                     {day.getDate()}
                                 </Button>
+                                {isClosed && <span className="text-[10px] text-slate-500">Выходной</span>}
                             </div>
                         )
                     })}
@@ -352,6 +393,7 @@ export function WeekGrid({
 
                     {days.map((day) => {
                         const dayKey = formatDateKey(day)
+                        const dayRule = workDayForDate(workWeek, day)
                         const dayStart = new Date(day)
                         dayStart.setHours(displayStartHour, 0, 0, 0)
                         const dayEnd = new Date(day)
@@ -362,7 +404,7 @@ export function WeekGrid({
                             return start < dayEnd && end > dayStart
                         })
                         const appointmentLayouts = layoutOverlappingAppointments(dayAppointments)
-                        const isToday = dayKey === formatDateKey(currentTime)
+                        const isToday = currentTime !== null && dayKey === formatDateKey(currentTime)
 
                         return (
                             <div
@@ -406,8 +448,8 @@ export function WeekGrid({
                                     start.setHours(0, startMinutes, 0, 0)
                                     const end = new Date(day)
                                     end.setHours(0, endMinutes, 0, 0)
-                                    if (startMinutes < WORKDAY_START_HOUR * 60 || endMinutes > WORKDAY_END_HOUR * 60 || (startMinutes < LUNCH_END_HOUR * 60 && endMinutes > LUNCH_START_HOUR * 60)) {
-                                        onInvalidSelection("Выберите интервал в рабочее время 09:00–16:00, кроме обеда 13:00–14:00.")
+                                    if (!canScheduleAt(workWeek, start, end)) {
+                                        onInvalidSelection("В это время организация закрыта или действует перерыв. Проверьте её график в настройках.")
                                         return
                                     }
                                     onSelectTime(
@@ -436,13 +478,16 @@ export function WeekGrid({
                                     const slot = new Date(day)
                                     slot.setHours(hour, 0, 0, 0)
                                     const slotMinutes = hour * 60
-                                    const isLunchSlot = slotMinutes >= LUNCH_START_HOUR * 60 && slotMinutes < LUNCH_END_HOUR * 60
-                                    const unavailable = slotMinutes < WORKDAY_START_HOUR * 60 || (slotMinutes < LUNCH_END_HOUR * 60 && slotMinutes + 50 > LUNCH_START_HOUR * 60) || slotMinutes + 50 > WORKDAY_END_HOUR * 60
+                                    const unavailable = !Array.from({length: Math.ceil(60 / timeStepMinutes)}, (_, index) => {
+                                        const start = new Date(slot)
+                                        start.setMinutes(index * timeStepMinutes)
+                                        return canScheduleAt(workWeek, start, new Date(start.getTime() + 50 * 60_000))
+                                    }).some(Boolean)
                                     return (
                                         <Button
                                             data-calendar-slot={slotMinutes}
                                             aria-label={`Создать запись: ${dayKey}, ${timeLabel(slot)}`}
-                                            className={`block w-full rounded-none border-0 text-left transition-colors ${isLunchSlot ? "disabled:opacity-100" : ""} ${unavailable ? `cursor-not-allowed ${isLunchSlot ? "bg-white" : "bg-slate-50"}` : "bg-white hover:bg-blue-50/70"}`}
+                                            className={`block w-full rounded-none border-0 text-left transition-colors ${unavailable ? "cursor-not-allowed bg-slate-50 disabled:opacity-100" : "bg-white hover:bg-blue-50/70"}`}
                                             disabled={unavailable}
                                             key={hour}
                                             onClick={(event) => {
@@ -450,7 +495,16 @@ export function WeekGrid({
                                                     ignoreNextSlotClick.current = false
                                                     return
                                                 }
-                                                onSelectTime(slot, undefined, event.currentTarget.getBoundingClientRect())
+                                                const bounds = event.currentTarget.getBoundingClientRect()
+                                                const offset = Math.max(0, Math.min(59, (event.clientY - bounds.top) / bounds.height * 60))
+                                                const minutes = Math.floor(offset / timeStepMinutes) * timeStepMinutes
+                                                const selected = new Date(slot)
+                                                selected.setMinutes(minutes)
+                                                if (!canScheduleAt(workWeek, selected, new Date(selected.getTime() + 50 * 60_000))) {
+                                                    onInvalidSelection("Выберите время в рабочие часы без перерывов.")
+                                                    return
+                                                }
+                                                onSelectTime(selected, undefined, bounds)
                                             }}
                                             style={{height: "100%"}}
                                             type="button"
@@ -469,19 +523,21 @@ export function WeekGrid({
                                     </div>
                                 )}
 
-                                <div
-                                    aria-label="Обеденный перерыв"
-                                    className="pointer-events-none absolute z-[5] flex flex-col items-start justify-start overflow-hidden rounded-lg border-0 bg-teal-100 px-2 py-1 text-left text-xs text-teal-950 shadow-none ring-0 outline-none"
-                                    style={{
-                                        top: (LUNCH_START_HOUR - displayStartHour) * hourHeight + 4,
-                                        height: (LUNCH_END_HOUR - LUNCH_START_HOUR) * hourHeight - 8,
-                                        left: 4,
-                                        right: 4,
-                                    }}
-                                >
-                                    <strong className="truncate font-semibold">Обед</strong>
-                                    <span className="tabular-nums">13:00 – 14:00</span>
-                                </div>
+                                {dayRule?.open && dayRule.breaks.map((item) => {
+                                    const begin = clockMinutes(item.start)
+                                    const finish = clockMinutes(item.end)
+                                    const visibleBegin = Math.max(begin, displayStartHour * 60)
+                                    const visibleEnd = Math.min(finish, displayEndHour * 60)
+                                    if (visibleBegin >= visibleEnd) return null
+                                    return (
+                                        <div aria-label={`${item.name}: ${item.start}–${item.end}`} className="pointer-events-none absolute z-[5] overflow-hidden rounded-md bg-teal-100 px-1.5 py-1 text-xs text-teal-950" key={item.id}
+                                            style={{top: (visibleBegin - displayStartHour * 60) / 60 * hourHeight + 2, height: Math.max(1, (visibleEnd - visibleBegin) / 60 * hourHeight - 4), left: 3, right: 3}}>
+                                            <strong className="block truncate">{item.name}</strong>
+                                            <span className="block truncate tabular-nums">{item.start}–{item.end}</span>
+                                        </div>
+                                    )
+                                })}
+                                {!dayRule?.open && <div className="pointer-events-none absolute inset-0 z-[4] flex items-center justify-center bg-slate-100/65"><span className="-rotate-90 text-xs font-medium text-slate-400">Выходной</span></div>}
 
                                 {dayAppointments.map((appointment) => {
                                     const start = new Date(appointment.startAt)

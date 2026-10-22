@@ -1,0 +1,93 @@
+# Production stack. Run on the VPS with a private /opt/clinic-schedule/.env.
+# Source code and image builds stay on GitHub Actions; the VPS pulls only images.
+name: clinic-schedule
+
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: clinic_schedule
+      POSTGRES_USER: clinic_schedule
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the VPS .env}
+      TZ: Asia/Omsk
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    shm_size: 128mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinic_schedule -d clinic_schedule"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [internal]
+
+  backend:
+    image: ghcr.io/kuminovvv/clinic-schedule-backend:${IMAGE_TAG:?The GitHub deployment must set IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://clinic_schedule:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/clinic_schedule?sslmode=disable
+      LISTEN_ADDR: 0.0.0.0:8080
+      CLINIC_TIMEZONE: Asia/Omsk
+      TZ: Asia/Omsk
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8080/healthz"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 6
+    networks: [internal]
+
+  frontend:
+    image: ghcr.io/kuminovvv/clinic-schedule-frontend:${IMAGE_TAG:?The GitHub deployment must set IMAGE_TAG}
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: "3000"
+      HOSTNAME: 0.0.0.0
+      BACKEND_INTERNAL_URL: http://backend:8080
+      CLINIC_TIMEZONE: Asia/Omsk
+      TZ: Asia/Omsk
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/schedule').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 20s
+      timeout: 8s
+      start_period: 20s
+      retries: 5
+    networks: [internal]
+
+  proxy:
+    image: caddy:2.10-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set the domain name}
+      ACME_EMAIL: ${ACME_EMAIL:?Set the Lets Encrypt email address}
+      BASIC_AUTH_USER: ${BASIC_AUTH_USER:?Set the login name}
+      BASIC_AUTH_HASH: ${BASIC_AUTH_HASH:?Set a Caddy bcrypt password hash}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      frontend:
+        condition: service_healthy
+    networks: [internal, public]
+
+networks:
+  internal:
+    internal: true
+  public:
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

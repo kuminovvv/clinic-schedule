@@ -1,8 +1,10 @@
 export { Add01StrokeRoundedIcon } from "./add-01-stroke-rounded";
-export { ArrowDown01StrokeRoundedIcon } from "./arrow-down-01-stroke-rounded";
-export { ArrowLeft01StrokeRoundedIcon } from "./arrow-left-01-stroke-rounded";
-export { ArrowRight01StrokeRoundedIcon } from "./arrow-right-01-stroke-rounded";
-export { ArrowUp01StrokeRoundedIcon } from "./arrow-up-01-stroke-rounded";
+export {
+  ArrowDown01StandardIcon,
+  ArrowLeft01StandardIcon,
+  ArrowRight01StandardIcon,
+  ArrowUp01StandardIcon,
+} from "./arrow-01-standard";
 export { Calendar03StrokeRoundedIcon } from "./calendar-03-stroke-rounded";
 export { Calendar04StrokeRoundedIcon } from "./calendar-04-stroke-rounded";
 export { Cancel01StrokeRoundedIcon } from "./cancel-01-stroke-rounded";

@@ -21,8 +21,19 @@ func calendarDayNumber(date time.Time) int64 {
 // spaced across the patient's stay but never closer than minIntervalDays.
 // Patients can run concurrently; appointments of one patient cannot overlap.
 func createCourseSchedule(start time.Time, plans []patientPlan, procedures map[string]procedure, settings settings, occupied []timeSlot) (scheduleResponse, error) {
+	return createCourseScheduleWithAbsences(start, plans, procedures, settings, occupied, nil)
+}
+
+func createCourseScheduleWithAbsences(start time.Time, plans []patientPlan, procedures map[string]procedure, settings settings, occupied []timeSlot, absences map[int]map[string]bool) (scheduleResponse, error) {
 	result := scheduleResponse{Appointments: []appointment{}, UnscheduledPatients: []int{}}
 	planDateKey := start.Format("2006-01-02")
+	plans = append([]patientPlan(nil), plans...)
+	sort.SliceStable(plans, func(i, j int) bool {
+		if severityRank(plans[i].Severity) != severityRank(plans[j].Severity) {
+			return severityRank(plans[i].Severity) < severityRank(plans[j].Severity)
+		}
+		return plans[i].PatientNumber < plans[j].PatientNumber
+	})
 	maxDays := 0
 	states := map[int]map[string]*courseState{}
 	for _, plan := range plans {
@@ -59,6 +70,9 @@ func createCourseSchedule(start time.Time, plans []patientPlan, procedures map[s
 		day := start.AddDate(0, 0, offset)
 		for _, plan := range plans {
 			if offset >= plan.StayDays {
+				continue
+			}
+			if absences[plan.PatientNumber][day.Format("2006-01-02")] {
 				continue
 			}
 			pending := make([]scheduleTask, 0, len(plan.ProcedureIDs))

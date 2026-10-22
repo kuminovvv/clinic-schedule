@@ -1,0 +1,231 @@
+name: Deploy (release tag)
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# A tag push never receives credentials until its commit and format pass validation.
+permissions:
+  contents: read
+
+# Serialize releases: two different tags must never deploy concurrently.
+concurrency:
+  group: clinic-schedule-production
+  cancel-in-progress: false
+
+jobs:
+  validate-release:
+    name: Validate release tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require stable SemVer and a commit reachable from main
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::Only stable SemVer tags such as v1.2.3 are allowed."
+            exit 1
+          fi
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::The release commit must be on main."
+            exit 1
+          fi
+
+  test-backend:
+    name: Test Go API
+    needs: validate-release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - name: Run backend tests
+        run: go test ./...
+      - name: Build backend binary
+        run: go build ./cmd/api
+
+  test-frontend:
+    name: Test Next.js
+    needs: validate-release
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.23.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - name: Install dependencies from lockfile
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm exec tsc --noEmit
+      - name: Lint
+        run: pnpm run lint
+      - name: Build frontend
+        run: pnpm run build
+
+  publish:
+    name: Publish versioned images
+    needs: [validate-release, test-backend, test-frontend]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@v3
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # A rerun reuses the original image only if it belongs to the same git commit.
+      # Existing tags are never silently overwritten with a different build.
+      - name: Detect already published images
+        id: existing
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          for service in backend frontend; do
+            image="ghcr.io/kuminovvv/clinic-schedule-${service}:${RELEASE_TAG}"
+            if docker manifest inspect "$image" >/dev/null 2>&1; then
+              docker pull --quiet "$image" >/dev/null
+              revision="$(docker image inspect "$image" --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}')"
+              if [[ "$revision" != "$RELEASE_SHA" ]]; then
+                echo "::error::Image $image already exists for another commit (or without a revision label)."
+                exit 1
+              fi
+              echo "${service}_exists=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "${service}_exists=false" >> "$GITHUB_OUTPUT"
+            fi
+          done
+
+      - name: Build and push backend
+        if: steps.existing.outputs.backend_exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./backend
+          file: ./backend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/kuminovvv/clinic-schedule-backend:${{ github.ref_name }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+      - name: Build and push frontend
+        if: steps.existing.outputs.frontend_exists == 'false'
+        uses: docker/build-push-action@v6
+        with:
+          context: ./frontend
+          file: ./frontend/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ghcr.io/kuminovvv/clinic-schedule-frontend:${{ github.ref_name }}
+          labels: org.opencontainers.image.revision=${{ github.sha }}
+
+  deploy:
+    name: Deploy VPS
+    needs: publish
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require SSH deployment configuration
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$DEPLOY_HOST" || -z "$DEPLOY_USER" || -z "$DEPLOY_SSH_KEY" || -z "$DEPLOY_KNOWN_HOSTS" ]]; then
+            echo "::error::VPS deployment failed: configure DEPLOY_HOST, DEPLOY_USER, DEPLOY_SSH_KEY and DEPLOY_KNOWN_HOSTS. Images were built, but the application was NOT deployed."
+            exit 1
+          fi
+
+      - name: Configure verified SSH host key
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$DEPLOY_HOST" =~ ^[a-zA-Z0-9._:-]+$ || ! "$DEPLOY_USER" =~ ^[a-zA-Z_][a-zA-Z0-9_.-]*$ ]]; then
+            echo "::error::Invalid SSH host or user."
+            exit 1
+          fi
+          install -d -m 700 "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/clinic_deploy_key"
+          chmod 600 "$HOME/.ssh/clinic_deploy_key"
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/clinic_deploy_key" >/dev/null
+          ssh-keygen -F "$DEPLOY_HOST" -f "$HOME/.ssh/known_hosts" >/dev/null || {
+            echo "::error::DEPLOY_KNOWN_HOSTS does not pin the configured DEPLOY_HOST."
+            exit 1
+          }
+
+      - name: Stage release files and deploy
+        shell: bash
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GHCR_USER: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$GHCR_USER" =~ ^[a-zA-Z0-9-]+$ ]]; then
+            echo "::error::Unexpected GitHub account name."
+            exit 1
+          fi
+          target="${DEPLOY_USER}@${DEPLOY_HOST}"
+          remote_dir="/opt/clinic-schedule/.releases/${RELEASE_TAG}"
+          ssh_options=(-o BatchMode=yes -o StrictHostKeyChecking=yes -o IdentitiesOnly=yes -i "$HOME/.ssh/clinic_deploy_key")
+          ssh "${ssh_options[@]}" "$target" "mkdir -p '$remote_dir'"
+          scp "${ssh_options[@]}" docker-compose.prod.yml "$target:$remote_dir/docker-compose.prod.yml"
+          scp "${ssh_options[@]}" deploy/Caddyfile "$target:$remote_dir/Caddyfile"
+          scp "${ssh_options[@]}" deploy/backup.sh "$target:$remote_dir/backup.sh"
+          scp "${ssh_options[@]}" deploy/scripts/deploy.sh "$target:$remote_dir/deploy.sh"
+          # stdin carries the short-lived token securely to docker login --password-stdin.
+          # No token is added to remote arguments or retained after the deployment.
+          printf '%s\n' "$GHCR_TOKEN" | ssh "${ssh_options[@]}" "$target" "bash '$remote_dir/deploy.sh' '$RELEASE_TAG' '$GHCR_USER'"
+          echo "Deployed ${RELEASE_TAG} to the VPS." >> "$GITHUB_STEP_SUMMARY"

@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
-  ArrowLeft01StrokeRoundedIcon as ArrowLeft,
+  ArrowLeft01StandardIcon as ArrowLeft,
   Calendar04StrokeRoundedIcon as Calendar04Icon,
 } from "@/shared/lib/icons"
 import {
@@ -58,7 +58,7 @@ export function SettingsSidebarLayout({ children }: { children: React.ReactNode 
         </SidebarFooter>
       </Sidebar>
       <SidebarInset className="min-h-[calc(100svh-4rem)] bg-transparent">
-        <div className="m-3 flex min-h-[calc(100svh-5.5rem)] flex-1 flex-col overflow-hidden rounded-[24px] bg-white">
+        <div className="m-3 flex min-h-[calc(100svh-5.5rem)] flex-1 flex-col overflow-clip rounded-[24px] bg-white">
           <div className="flex h-12 shrink-0 items-center gap-2 border-b border-slate-100 bg-white px-4 sm:px-6">
             <SidebarTrigger aria-label="Переключить меню настроек" />
             <span className="text-sm font-medium">Настройки</span>

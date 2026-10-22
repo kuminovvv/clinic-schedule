@@ -1,25 +1,23 @@
 "use client"
 
 import {useEffect, useRef, useState} from "react"
+import {useRouter} from "next/navigation"
 import {
     type Appointment,
     type AppointmentInput,
 } from "@/entities/appointment"
-import {CALENDAR_SETTINGS_CHANGE_EVENT, type TimeStepMinutes} from "@/entities/calendar-settings"
+import {CALENDAR_SETTINGS_CHANGE_EVENT, canScheduleAt, clockMinutes, workDayForDate, type CalendarSettings, type WorkDay} from "@/entities/calendar-settings"
 import {AppointmentDialog} from "@/features/manage-appointment/ui/appointment-dialog"
 import {
     addDays,
     formatDateKey,
     formatDateTimeLocal,
-    LUNCH_END_HOUR,
-    LUNCH_START_HOUR,
-    WORKDAY_END_HOUR,
-    WORKDAY_START_HOUR
 } from "@/shared/lib/calendar-date"
 import {getClientData, sendBackendRequest} from "@/shared/api/backend-client"
 import {notify} from "@/shared/lib/notifications"
 import {Button} from "@/shared/ui/shadcn/button"
 import {CalendarToolbar} from "./calendar-toolbar"
+import {ClearScheduleDialog} from "./clear-schedule-dialog"
 import {usePageDrivenScroll} from "@/shared/lib/hooks/use-page-driven-scroll"
 import {WeekGrid} from "./week-grid"
 
@@ -37,53 +35,62 @@ function parseDateKey(value?: string) {
     return formatDateKey(date) === value ? date : null
 }
 
-function getDefaultStart(date: Date, currentTime: Date) {
+function getDefaultStart(date: Date, currentTime: Date, week: WorkDay[]) {
     const start = new Date(date)
-    if (start.toDateString() !== currentTime.toDateString()) {
-        start.setHours(9, 0, 0, 0)
-        return start
-    }
-
-    start.setTime(currentTime.getTime())
+    const sameDay = start.toDateString() === currentTime.toDateString()
+    if (sameDay) start.setTime(currentTime.getTime())
     start.setSeconds(0, 0)
-    const nextSlot = (Math.floor((currentTime.getHours() * 60 + currentTime.getMinutes()) / 30) + 1) * 30
-    start.setHours(0, 0, 0, 0)
-    start.setMinutes(nextSlot)
-    const minutes = start.getHours() * 60 + start.getMinutes()
-    if (minutes >= WORKDAY_END_HOUR * 60) {
+    for (let dayOffset = 0; dayOffset < 14; dayOffset++) {
+        const rule = workDayForDate(week, start)
+        if (rule?.open) {
+            const opening = clockMinutes(rule.start)
+            const current = dayOffset === 0 && sameDay ? start.getHours() * 60 + start.getMinutes() : opening
+            for (let minutes = Math.max(opening, Math.ceil(current / 10) * 10); minutes + 50 <= clockMinutes(rule.end); minutes += 10) {
+                const candidate = new Date(start)
+                candidate.setHours(0, minutes, 0, 0)
+                if (canScheduleAt(week, candidate, new Date(candidate.getTime() + 50 * 60_000))) return candidate
+            }
+        }
         start.setDate(start.getDate() + 1)
-        start.setHours(9, 0, 0, 0)
-    } else if (minutes < 9 * 60) start.setHours(9, 0, 0, 0)
-    if (minutes >= LUNCH_START_HOUR * 60 && minutes < LUNCH_END_HOUR * 60) start.setHours(LUNCH_END_HOUR, 0, 0, 0)
-    return start
+        start.setHours(0, 0, 0, 0)
+    }
+    return null
 }
-
-type CalendarSettings = { timeStepMinutes: TimeStepMinutes; displayStartHour: number; displayEndHour: number }
 
 export function Calendar({initialDateKey, initialAppointments, initialSettings}: {
     initialDateKey: string;
     initialAppointments: Appointment[];
     initialSettings: CalendarSettings
 }) {
+    const router = useRouter()
     const [selectedDate, setSelectedDate] = useState<Date>(() => parseDateKey(initialDateKey) ?? new Date())
     const [selectedDay, setSelectedDay] = useState<Date>(() => parseDateKey(initialDateKey) ?? new Date())
-    const [currentTime, setCurrentTime] = useState<Date>(() => parseDateKey(initialDateKey) ?? new Date())
+    // The URL date is the selected calendar day, NOT the real current time.
+    // Until hydration, hide the clock indicator to avoid a false midnight line.
+    const [currentTime, setCurrentTime] = useState<Date | null>(null)
     const [appointments, setAppointments] = useState<Appointment[]>(initialAppointments)
     const [calendarSettings, setCalendarSettings] = useState(initialSettings)
     const [selectedPatientNumber, setSelectedPatientNumber] = useState<number | null>(null)
     const {timeStepMinutes, displayStartHour, displayEndHour} = calendarSettings
     const [dialog, setDialog] = useState<DialogState | null>(null)
+    const [clearDialogOpen, setClearDialogOpen] = useState(false)
+    const [isClearingSchedule, setIsClearingSchedule] = useState(false)
     const [storageError, setStorageError] = useState<"read" | "write" | null>(null)
     const settingsRequestSequence = useRef(0)
-    const {trackRef, panelRef, viewportRef, contentRef, viewportHeight, panelStyle} = usePageDrivenScroll({
+    const appointmentsRequestSequence = useRef(0)
+    const {trackRef, panelRef, viewportRef, contentRef, panelStyle} = usePageDrivenScroll({
         topOffset: 64,
         bottomGap: 16,
     })
 
     useEffect(() => {
-        const intervalId = window.setInterval(() => setCurrentTime(new Date()), 60_000)
-        return () => window.clearInterval(intervalId)
-    }, [initialDateKey])
+        const frame = window.requestAnimationFrame(() => setCurrentTime(new Date()))
+        const intervalId = window.setInterval(() => setCurrentTime(new Date()), 15_000)
+        return () => {
+            window.cancelAnimationFrame(frame)
+            window.clearInterval(intervalId)
+        }
+    }, [])
 
     useEffect(() => {
         let active = true
@@ -107,17 +114,41 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
 
     useEffect(() => {
         if (!selectedDate) return
+        const requestSequence = ++appointmentsRequestSequence.current
         const start = addDays(selectedDate, -((selectedDate.getDay() + 6) % 7))
         const end = addDays(start, 7)
         const from = formatDateKey(start)
         const to = formatDateKey(end)
         getClientData<Appointment[]>(`/v1/appointments?from=${from}&to=${to}`)
             .then((loadedAppointments) => {
+                if (requestSequence !== appointmentsRequestSequence.current) return
                 setAppointments(loadedAppointments)
                 setStorageError(null)
             })
-            .catch(() => setStorageError("read"))
+            .catch(() => {
+                if (requestSequence === appointmentsRequestSequence.current) setStorageError("read")
+            })
     }, [selectedDate])
+
+    const handleClearSchedule = async () => {
+        if (isClearingSchedule) return
+        setIsClearingSchedule(true)
+        ++appointmentsRequestSequence.current
+        try {
+            await sendBackendRequest("/v1/schedules", "DELETE", {confirmation: "CLEAR_ALL_SCHEDULES"})
+            setAppointments([])
+            setSelectedPatientNumber(null)
+            setDialog(null)
+            setStorageError(null)
+            setClearDialogOpen(false)
+            notify.success("Расписание очищено", "Все записи и планы пациентов удалены. Каталог процедур сохранён.")
+            router.refresh()
+        } catch {
+            // Shared API error interceptor already notifies the user.
+        } finally {
+            setIsClearingSchedule(false)
+        }
+    }
 
     const handleSave = async (appointmentInput: AppointmentInput, id?: string) => {
         const appointmentId = id ?? crypto.randomUUID()
@@ -153,12 +184,7 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
     const handleMoveAppointment = async (id: string, start: Date, end: Date) => {
         const existing = appointments.find((item) => item.id === id)
         if (!existing) return
-        const startMinutes = start.getHours() * 60 + start.getMinutes()
-        const endMinutes = end.getHours() * 60 + end.getMinutes()
-        const isValidTime = start < end && start.toDateString() === end.toDateString() &&
-            startMinutes >= WORKDAY_START_HOUR * 60 &&
-            endMinutes <= WORKDAY_END_HOUR * 60 &&
-            !(startMinutes < LUNCH_END_HOUR * 60 && endMinutes > LUNCH_START_HOUR * 60)
+        const isValidTime = canScheduleAt(calendarSettings.workWeek, start, end)
         const hasConflict = appointments.some((appointment) =>
             appointment.id !== id && appointment.status !== "cancelled" &&
             (existing.patientNumber == null || appointment.patientNumber == null || (existing.patientNumber === appointment.patientNumber && (!existing.sourcePlanDate || !appointment.sourcePlanDate || existing.sourcePlanDate === appointment.sourcePlanDate))) &&
@@ -167,7 +193,7 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
         if (!isValidTime || hasConflict) {
             notify.warning(
                 hasConflict ? "Это время уже занято" : "Время вне рабочего дня",
-                hasConflict ? "Выберите свободное время или другой день." : "Выберите время с 09:00 до 16:00, кроме перерыва с 13:00 до 14:00.",
+                hasConflict ? "Выберите свободное время или другой день." : "Выберите рабочий день и время, не пересекающееся с перерывами организации.",
             )
             return
         }
@@ -192,8 +218,14 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
         : appointments.filter((appointment) => appointment.patientNumber === selectedPatientNumber)
 
     const handleCreate = () => {
-        const date = selectedDay.toDateString() === currentTime.toDateString() ? currentTime : selectedDay
-        setDialog({initialStartAt: formatDateTimeLocal(getDefaultStart(date, currentTime))})
+        const now = currentTime ?? new Date()
+        const date = selectedDay.toDateString() === now.toDateString() ? now : selectedDay
+        const available = getDefaultStart(date, now, calendarSettings.workWeek)
+        if (!available) {
+            notify.warning("Нет доступного времени", "Проверьте часы работы и перерывы организации в настройках календаря.")
+            return
+        }
+        setDialog({initialStartAt: formatDateTimeLocal(available)})
     }
 
     return (
@@ -208,6 +240,8 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                         patientNumbers={patientNumbers}
                         selectedPatientNumber={selectedPatientNumber}
                         onCreate={handleCreate}
+                        onClearSchedule={() => setClearDialogOpen(true)}
+                        isClearingSchedule={isClearingSchedule}
                         onMoveWeek={(offset) => {
                             setSelectedDate((date) => date && addDays(date, offset * 7))
                             setSelectedDay((date) => date && addDays(date, offset * 7))
@@ -253,7 +287,7 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                                         timeStepMinutes={timeStepMinutes}
                                         displayStartHour={displayStartHour}
                                         displayEndHour={displayEndHour}
-                                        availableHeight={viewportHeight}
+                                        workWeek={calendarSettings.workWeek}
                                         viewportRef={viewportRef}
                                         contentRef={contentRef}
                                         onSelectTime={(date, endAt, anchor) => {
@@ -274,13 +308,20 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                         appointment={dialog?.appointment}
                         appointments={appointments}
                         timeStepMinutes={timeStepMinutes}
-                        initialStartAt={dialog?.initialStartAt ?? formatDateTimeLocal(currentTime)}
+                        workWeek={calendarSettings.workWeek}
+                        initialStartAt={dialog?.initialStartAt ?? formatDateTimeLocal(currentTime ?? selectedDay)}
                         initialEndAt={dialog?.initialEndAt}
                         anchor={dialog?.anchor}
                         onClose={() => setDialog(null)}
                         onDelete={handleDelete}
                         onSave={handleSave}
                         open={dialog !== null}
+                    />
+                    <ClearScheduleDialog
+                        open={clearDialogOpen}
+                        pending={isClearingSchedule}
+                        onClose={() => setClearDialogOpen(false)}
+                        onConfirm={() => void handleClearSchedule()}
                     />
                 </main>
             </div>

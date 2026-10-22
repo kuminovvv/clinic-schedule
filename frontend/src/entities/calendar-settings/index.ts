@@ -11,3 +11,5 @@ export {
   saveTimeStepMinutes,
 } from "./model/storage"
 export type { TimeStepMinutes } from "./model/storage"
+export {WEEKDAY_NAMES, canScheduleAt, clockMinutes, validateWorkWeek, workDayForDate} from "./model/working-hours"
+export type {CalendarSettings, WorkBreak, WorkDay} from "./model/working-hours"

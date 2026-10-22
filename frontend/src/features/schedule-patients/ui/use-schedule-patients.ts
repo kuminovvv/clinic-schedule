@@ -138,7 +138,8 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
         {
             id: crypto.randomUUID(),
             name: "Процедура " + (procedureDrafts.length + 1),
-            durationMinutes: 50,
+            durationMinutes: 30,
+            preparationMinutes: 20,
             isRelaxing: false,
             minIntervalDays: 1,
             defaultWeeklyCount: 1,
@@ -162,6 +163,7 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
     }
     const validProcedures = procedureDrafts.every((procedure) =>
         procedure.name.trim() && Number.isInteger(procedure.durationMinutes) && procedure.durationMinutes >= 1 && procedure.durationMinutes <= 420 &&
+        Number.isInteger(procedure.preparationMinutes) && procedure.preparationMinutes >= 0 && procedure.durationMinutes + procedure.preparationMinutes <= 420 &&
         Number.isInteger(procedure.minIntervalDays) && procedure.minIntervalDays >= 1 && procedure.minIntervalDays <= 365 &&
         Number.isInteger(procedure.defaultWeeklyCount) && procedure.defaultWeeklyCount >= 1 && procedure.defaultWeeklyCount <= 7,
     )

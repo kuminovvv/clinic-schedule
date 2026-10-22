@@ -1,9 +1,8 @@
 import { Calendar } from "./calendar"
 import { getServerData } from "@/shared/api/backend"
 import type { Appointment } from "@/entities/appointment"
-import type { TimeStepMinutes } from "@/entities/calendar-settings"
+import type { CalendarSettings } from "@/entities/calendar-settings"
 
-type CalendarSettings = { timeStepMinutes: TimeStepMinutes; displayStartHour: number; displayEndHour: number }
 const shiftDateKey = (dateKey: string, offset: number) => {
   const [year, month, day] = dateKey.split("-").map(Number)
   const date = new Date(Date.UTC(year, month - 1, day + offset))

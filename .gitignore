@@ -2,9 +2,11 @@
 .env
 .env.*
 !.env.example
+!.env.production.example
 **/.env
 **/.env.*
 !**/.env.example
+!**/.env.production.example
 
 # Local editor, dependency, build, and runtime artifacts
 .idea/
@@ -26,3 +28,8 @@
 *.p12
 *.pfx
 .DS_Store
+# Never commit real deployment credentials or VPS database backups.
+/.env.production
+/deploy/.env
+/deploy/backups/
+/backups/

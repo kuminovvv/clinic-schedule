@@ -19,6 +19,7 @@ export const explainApiError = ({status, reason = "", path, method}: ApiFailure)
   const isSchedule = path.startsWith("/v1/schedules")
   const isAppointment = path.startsWith("/v1/appointments")
   const isSettings = path.startsWith("/v1/calendar-settings")
+  const isAbsence = path.startsWith("/v1/patient-absences")
 
   if (message === "invalid response body") {
     return {type: "error", title: "Не удалось прочитать полученные данные", description: "Попробуйте повторить действие. Если проблема останется, обратитесь к ответственному сотруднику."}
@@ -27,6 +28,12 @@ export const explainApiError = ({status, reason = "", path, method}: ApiFailure)
     return {type: "error", title: "Не удалось связаться с программой", description: "Проверьте подключение и повторите действие."}
   }
   if (status === 409) {
+    if (isAbsence && message.includes("manually edited")) {
+      return {type: "warning", title: "Есть сеанс, изменённый вручную", description: "Он попадает в даты отсутствия. Сначала перенесите или отмените его в календаре, затем повторите перепланирование. Остальные записи не изменены."}
+    }
+    if (isAbsence) {
+      return {type: "warning", title: "Расписание изменилось", description: "Обновите страницу и заново проверьте даты отсутствия. Уже внесённые изменения сохранены."}
+    }
     if (isProcedure && method === "DELETE") {
       return {type: "warning", title: "Процедуру пока нельзя удалить", description: "Она уже назначена пациенту. Сначала уберите её из назначений, затем попробуйте снова."}
     }
@@ -45,6 +52,15 @@ export const explainApiError = ({status, reason = "", path, method}: ApiFailure)
     return {type: "warning", title: "Не удалось выполнить изменение", description: "Данные могли измениться. Обновите страницу и попробуйте ещё раз."}
   }
   if (status === 422) {
+    if (isAbsence && message.includes("cannot be rescheduled")) {
+      return {type: "warning", title: "Не удалось перенести все сеансы", description: "В оставшийся срок лечения не хватает свободного времени. Измените период отсутствия или срок лечения. Расписание не изменено."}
+    }
+    if (isAbsence) {
+      return {type: "warning", title: "Даты отсутствия не подходят", description: "Выберите дни в пределах срока пребывания пациента. Уже прошедшие периоды нельзя отмечать задним числом."}
+    }
+    if (message.includes("outside organization hours") || message.includes("overlaps a closure")) {
+      return {type: "warning", title: "Организация в это время не принимает", description: "Выберите рабочий день и время без перерыва. График работы можно изменить в настройках календаря."}
+    }
     if (message.includes("outside patient treatment period")) {
       return {type: "warning", title: "Дата вне срока пребывания", description: "Выберите день, когда пациент ещё находится на лечении."}
     }
@@ -54,6 +70,7 @@ export const explainApiError = ({status, reason = "", path, method}: ApiFailure)
     return {type: "warning", title: "Эти данные пока нельзя сохранить", description: "Проверьте выбранные даты и количество процедур."}
   }
   if (status === 400) {
+    if (isAbsence) return {type: "warning", title: "Проверьте даты отсутствия", description: "Укажите даты начала и окончания и причину отсутствия."}
     if (isProcedure) return {type: "warning", title: "Проверьте данные процедуры", description: "Укажите название, длительность, интервал и количество сеансов в допустимых пределах."}
     if (isPlan || isSchedule) return {type: "warning", title: "Проверьте назначения пациентов", description: "Проверьте срок пребывания, количество сеансов и выбранные процедуры."}
     if (isSettings) return {type: "warning", title: "Проверьте настройки календаря", description: "Выберите допустимое время начала и окончания рабочего дня."}
