@@ -123,6 +123,11 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
             .then((loadedAppointments) => {
                 if (requestSequence !== appointmentsRequestSequence.current) return
                 setAppointments(loadedAppointments)
+                // A patient filter chosen in another week must not make all
+                // appointments in the newly loaded week appear missing.
+                setSelectedPatientNumber((selected) => selected !== null &&
+                    !loadedAppointments.some((appointment) => appointment.patientNumber === selected)
+                    ? null : selected)
                 setStorageError(null)
             })
             .catch(() => {
@@ -243,10 +248,12 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                         onClearSchedule={() => setClearDialogOpen(true)}
                         isClearingSchedule={isClearingSchedule}
                         onMoveWeek={(offset) => {
+                            setSelectedPatientNumber(null)
                             setSelectedDate((date) => date && addDays(date, offset * 7))
                             setSelectedDay((date) => date && addDays(date, offset * 7))
                         }}
                         onToday={() => {
+                            setSelectedPatientNumber(null)
                             const today = new Date();
                             setSelectedDate(today);
                             setSelectedDay(today)
@@ -273,6 +280,11 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                                 </p>
                             )}
                             <div className="flex h-full flex-col">
+                                {!storageError && appointments.length === 0 && (
+                                    <p className="border-b border-slate-200 bg-slate-50 px-5 py-2 text-sm text-slate-600" role="status">
+                                        На выбранной неделе нет сохранённых записей. Проверьте дату или назначьте процедуры пациенту.
+                                    </p>
+                                )}
                                 <div className="min-h-0 flex-1">
                                     <WeekGrid
                                         appointments={visibleAppointments}

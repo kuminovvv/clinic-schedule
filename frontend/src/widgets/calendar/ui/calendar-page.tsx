@@ -19,5 +19,7 @@ export const CalendarPage = async ({ dateKey }: { dateKey: string }) => {
     getServerData<Appointment[]>(`/v1/appointments?from=${weekStart}&to=${weekEnd}`),
     getServerData<CalendarSettings>("/v1/calendar-settings"),
   ])
-  return <Calendar initialAppointments={appointments} initialDateKey={parsedDate} initialSettings={settings} />
+  // Reset client-side calendar selection when navigation supplies a new date.
+  // Otherwise a previously mounted week and patient filter can hide new cards.
+  return <Calendar key={parsedDate} initialAppointments={appointments} initialDateKey={parsedDate} initialSettings={settings} />
 }

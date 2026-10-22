@@ -52,6 +52,9 @@ export const explainApiError = ({status, reason = "", path, method}: ApiFailure)
     return {type: "warning", title: "Не удалось выполнить изменение", description: "Данные могли измениться. Обновите страницу и попробуйте ещё раз."}
   }
   if (status === 422) {
+    if (isSchedule && message.includes("no procedures assigned to patients")) {
+      return {type: "warning", title: "Нет назначенных процедур", description: "Добавьте пациенту процедуры и число сеансов, сохраните назначения и повторите составление расписания."}
+    }
     if (isAbsence && message.includes("cannot be rescheduled")) {
       return {type: "warning", title: "Не удалось перенести все сеансы", description: "В оставшийся срок лечения не хватает свободного времени. Измените период отсутствия или срок лечения. Расписание не изменено."}
     }
@@ -70,6 +73,12 @@ export const explainApiError = ({status, reason = "", path, method}: ApiFailure)
     return {type: "warning", title: "Эти данные пока нельзя сохранить", description: "Проверьте выбранные даты и количество процедур."}
   }
   if (status === 400) {
+    if (isSchedule && message.includes("experimental solver supports at most 80 sessions")) {
+      return {type: "warning", title: "Слишком большой курс для тестового оптимизатора", description: "Текущий локальный CP-SAT поддерживает до 80 сеансов за один расчёт. Уменьшите число назначений для проверки."}
+    }
+    if (isSchedule && message.includes("experimental solver supports at most 31 days")) {
+      return {type: "warning", title: "Слишком длительный курс для тестового оптимизатора", description: "Текущая локальная версия CP-SAT рассчитывает курс продолжительностью до 31 дня."}
+    }
     if (isAbsence) return {type: "warning", title: "Проверьте даты отсутствия", description: "Укажите даты начала и окончания и причину отсутствия."}
     if (isProcedure) return {type: "warning", title: "Проверьте данные процедуры", description: "Укажите название, длительность, интервал и количество сеансов в допустимых пределах."}
     if (isPlan || isSchedule) return {type: "warning", title: "Проверьте назначения пациентов", description: "Проверьте срок пребывания, количество сеансов и выбранные процедуры."}

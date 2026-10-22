@@ -158,6 +158,66 @@ func TestCoursePersistenceIntegration(t *testing.T) {
 	}
 }
 
+func TestEmptyCourseCannotReportSuccessfulGeneration(t *testing.T) {
+	db := isolatedScheduleDatabase(t)
+	api := &server{db: db}
+	date := "2099-02-03"
+	request := httptest.NewRequest(http.MethodPost, "/v1/schedules/generate", bytes.NewReader([]byte(`{"date":"`+date+`"}`)))
+	response := httptest.NewRecorder()
+	api.generate(response, request)
+	if response.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("empty schedule must not report success: %d %s", response.Code, response.Body.String())
+	}
+	var reports int
+	if err := db.QueryRow(context.Background(), "SELECT COUNT(*) FROM schedule_reports WHERE schedule_date=$1", date).Scan(&reports); err != nil || reports != 0 {
+		t.Fatalf("empty course must not persist a schedule report: reports=%d err=%v", reports, err)
+	}
+}
+
+func TestCPOptimizerPersistsCalendarCards(t *testing.T) {
+	if os.Getenv("CLINIC_COURSE_OPTIMIZER") != "cp-sat" {
+		t.Skip("only applicable when running the local CP-SAT backend")
+	}
+	db := isolatedScheduleDatabase(t)
+	api := &server{db: db}
+	call := func(method, path string, payload any, handler func(http.ResponseWriter, *http.Request)) *httptest.ResponseRecorder {
+		t.Helper()
+		body, err := json.Marshal(payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		response := httptest.NewRecorder()
+		handler(response, req)
+		return response
+	}
+	date := "2099-01-05"
+	procedures := []procedure{{ID: "test-treatment", Name: "Терапия", DurationMinutes: 30, MinIntervalDays: 1, DefaultWeeklyCount: 3}}
+	if response := call(http.MethodPut, "/v1/procedures", procedures, api.saveProcedures); response.Code != http.StatusOK {
+		t.Fatalf("could not create procedure: %d %s", response.Code, response.Body.String())
+	}
+	plan := dayPlan{Date: date, Plans: []patientPlan{{PatientNumber: 1, Severity: "medium", StayDays: 7, ProcedureIDs: []string{"test-treatment"}, ProcedureCounts: map[string]int{"test-treatment": 3}}}}
+	if response := call(http.MethodPut, "/v1/day-plans", plan, api.saveDayPlan); response.Code != http.StatusOK {
+		t.Fatalf("could not save plan: %d %s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodPost, "/v1/schedules/generate", scheduleRequest{Date: date}, api.generate); response.Code != http.StatusOK {
+		t.Fatalf("CP-SAT generation did not persist: %d %s", response.Code, response.Body.String())
+	}
+	request := httptest.NewRequest(http.MethodGet, "/v1/appointments?from=2099-01-05&to=2099-01-12", nil)
+	response := httptest.NewRecorder()
+	api.listAppointments(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("calendar failed to load appointments: %d %s", response.Code, response.Body.String())
+	}
+	var appointments []appointment
+	if err := json.Unmarshal(response.Body.Bytes(), &appointments); err != nil {
+		t.Fatal(err)
+	}
+	if len(appointments) != 3 {
+		t.Fatalf("calendar should show three generated cards, got %d", len(appointments))
+	}
+}
+
 func mustDate(t *testing.T, value string) time.Time {
 	t.Helper()
 	date, err := time.Parse("2006-01-02", value)

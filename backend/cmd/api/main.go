@@ -843,6 +843,10 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 			totalSessions += patient.ProcedureCounts[procedureID]
 		}
 	}
+	if totalSessions == 0 {
+		writeError(w, http.StatusUnprocessableEntity, "no procedures assigned to patients")
+		return
+	}
 	if totalSessions > 3000 {
 		writeError(w, 400, "too many sessions in one treatment plan (maximum 3000)")
 		return
