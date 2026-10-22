@@ -32,6 +32,13 @@ jobs:
         with:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
+      - name: Apply migrations to disposable PostgreSQL
+        run: |
+          set -euo pipefail
+          for migration in backend/migrations/*.sql; do
+            docker exec -i '${{ job.services.postgres.id }}' \
+              psql -X -v ON_ERROR_STOP=1 -U clinic_test -d clinic_test < "$migration"
+          done
       - run: go test -count=1 ./...
         working-directory: backend
 
