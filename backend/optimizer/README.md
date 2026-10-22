@@ -10,10 +10,13 @@ From the repository root:
 ```powershell
 py -m venv backend\.venv-cpsat
 backend\.venv-cpsat\Scripts\python.exe -m pip install -r backend\optimizer\requirements.txt
-$env:CLINIC_COURSE_OPTIMIZER = 'cp-sat'
-# Keep the existing local DATABASE_URL, LISTEN_ADDR and CLINIC_TIMEZONE values.
-go -C backend run ./cmd/api
+powershell -NoProfile -ExecutionPolicy Bypass -File backend\optimizer\start-local.ps1
 ```
+
+The local PowerShell launcher loads the already configured ignored
+`backend/.env.local` and selects `CLINIC_COURSE_OPTIMIZER=cp-sat`, without
+printing the database password. Stop the existing Go API on port 8081 before
+running it; PostgreSQL and the Next.js dev server need not restart.
 
 The Go API loads `backend/optimizer/cpsat_course.py` when launched with
 `backend` as its working directory. Otherwise set `CLINIC_OPTIMIZER_SCRIPT` and
