@@ -81,7 +81,8 @@ jobs:
       - name: Install dependencies from lockfile
         run: pnpm install --frozen-lockfile
       - name: Typecheck
-        run: pnpm exec tsc --noEmit
+        # The clean GitHub runner has no .next/types until Next generates them.
+        run: pnpm exec next typegen && pnpm exec tsc --noEmit
       - name: Lint
         run: pnpm run lint
       - name: Build frontend
