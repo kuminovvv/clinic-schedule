@@ -40,7 +40,7 @@ fi
 umask 077
 site_password="$(openssl rand -hex 20)"
 db_password="$(openssl rand -hex 32)"
-password_hash="$(printf '%s' "$site_password" | docker run --rm -i caddy:2.10-alpine caddy hash-password)"
+password_hash="$(printf '%s\n' "$site_password" | docker run --rm -i caddy:2.10-alpine caddy hash-password)"
 if [[ ! "$password_hash" =~ ^\$2[aby]\$ ]]; then
   echo 'Caddy failed to generate a bcrypt hash.' >&2
   exit 1
