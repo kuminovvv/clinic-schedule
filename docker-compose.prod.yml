@@ -27,6 +27,8 @@ services:
     environment:
       DATABASE_URL: postgres://clinic_schedule:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@db:5432/clinic_schedule?sslmode=disable
       LISTEN_ADDR: 0.0.0.0:8080
+      # Use the bounded-time Go scheduler in production, without Python/CP-SAT.
+      CLINIC_COURSE_OPTIMIZER: fast
       CLINIC_TIMEZONE: Asia/Omsk
       TZ: Asia/Omsk
     depends_on:

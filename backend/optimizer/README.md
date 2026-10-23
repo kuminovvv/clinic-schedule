@@ -21,8 +21,8 @@
   doctor. Doctors' individual availability and room reassignment remain
   future capabilities, requiring separate data models.
 - Reports unscheduled sessions when no valid slot exists rather than violating
-  restrictions. Like CP-SAT, it has **no knowledge of doctors, rooms or equipment**
-  because those are not modeled by the application.
+  restrictions. Named rooms are treated as shared single-occupancy resources;
+  **individual doctors and equipment** remain unmodeled.
 - It is a **heuristic**: unlike a fully solved CP-SAT problem, the result is not
   a proof of global optimality, and it might miss a feasible allocation on a
   very constrained course. It must not set clinical treatment policy.
@@ -30,7 +30,9 @@
 The local launcher below now selects this fast algorithm by default. To
 compare the CP-SAT prototype, set `CLINIC_COURSE_OPTIMIZER=cp-sat` before
 launching the Go backend directly (the launcher intentionally selects fast).
-Neither change affects the production Docker images or their environment.
+The production Compose file selects `CLINIC_COURSE_OPTIMIZER=fast` starting
+with the release that includes it. CP-SAT remains strictly opt-in and is not
+installed in the production Docker image.
 
 ## Optional CP-SAT prototype
 
