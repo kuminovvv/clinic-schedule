@@ -123,11 +123,9 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
             .then((loadedAppointments) => {
                 if (requestSequence !== appointmentsRequestSequence.current) return
                 setAppointments(loadedAppointments)
-                // A patient filter chosen in another week must not make all
-                // appointments in the newly loaded week appear missing.
-                setSelectedPatientNumber((selected) => selected !== null &&
-                    !loadedAppointments.some((appointment) => appointment.patientNumber === selected)
-                    ? null : selected)
+                // The patient filter is independent of the visible week.
+                // In a week without their appointments, show an empty schedule
+                // instead of silently switching to all patients.
                 setStorageError(null)
             })
             .catch(() => {
@@ -217,7 +215,10 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
     }
 
     const handleRetryStorage = () => window.location.reload()
-    const patientNumbers = [...new Set(appointments.flatMap((appointment) => appointment.patientNumber ? [appointment.patientNumber] : []))].sort((first, second) => first - second)
+    const patientNumbers = [...new Set([
+        ...appointments.flatMap((appointment) => appointment.patientNumber ? [appointment.patientNumber] : []),
+        ...(selectedPatientNumber !== null ? [selectedPatientNumber] : []),
+    ])].sort((first, second) => first - second)
     const visibleAppointments = selectedPatientNumber === null
         ? appointments
         : appointments.filter((appointment) => appointment.patientNumber === selectedPatientNumber)
@@ -248,12 +249,10 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                         onClearSchedule={() => setClearDialogOpen(true)}
                         isClearingSchedule={isClearingSchedule}
                         onMoveWeek={(offset) => {
-                            setSelectedPatientNumber(null)
                             setSelectedDate((date) => date && addDays(date, offset * 7))
                             setSelectedDay((date) => date && addDays(date, offset * 7))
                         }}
                         onToday={() => {
-                            setSelectedPatientNumber(null)
                             const today = new Date();
                             setSelectedDate(today);
                             setSelectedDay(today)
@@ -280,9 +279,11 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                                 </p>
                             )}
                             <div className="flex h-full flex-col">
-                                {!storageError && appointments.length === 0 && (
+                                {!storageError && visibleAppointments.length === 0 && (
                                     <p className="border-b border-slate-200 bg-slate-50 px-5 py-2 text-sm text-slate-600" role="status">
-                                        На выбранной неделе нет сохранённых записей. Проверьте дату или назначьте процедуры пациенту.
+                                        {selectedPatientNumber === null
+                                            ? "На выбранной неделе нет сохранённых записей. Проверьте дату или назначьте процедуры пациенту."
+                                            : `У пациента ${selectedPatientNumber} нет записей на выбранной неделе.`}
                                     </p>
                                 )}
                                 <div className="min-h-0 flex-1">
