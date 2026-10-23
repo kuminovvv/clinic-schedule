@@ -25,13 +25,12 @@ const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   month: "long",
 })
 
-const patientTabClassName = "-mb-px flex h-11 shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-t-lg border-b-[3px] border-transparent px-4 text-sm font-medium text-slate-500 outline-none transition-colors hover:bg-slate-50 hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset data-active:border-blue-600 data-active:bg-blue-100/80 data-active:font-semibold data-active:text-blue-800 data-active:hover:bg-blue-100/80 data-active:hover:text-blue-800"
+const patientTabClassName = "flex h-8 shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-lg px-3 text-sm font-medium text-slate-600 outline-none transition-colors hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset data-active:bg-white data-active:text-slate-950 data-active:shadow-sm"
 
 export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSchedule, isClearingSchedule, patientNumbers, selectedPatientNumber, onSelectPatient }: CalendarToolbarProps) {
   return (
     <div className="bg-white">
-      <section aria-label="Управление календарём" className="flex flex-col gap-3 bg-white px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:px-6">
-        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-3">
+      <section aria-label="Управление календарём" className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
           <nav aria-label="Навигация по календарю" className="flex shrink-0 items-center gap-2 sm:gap-3">
             <Button className="h-10 shrink-0 rounded-xl px-4" onClick={onToday} variant="outline">
               Сегодня
@@ -49,8 +48,38 @@ export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSc
               <p className="truncate text-xs capitalize text-slate-500">{dateFormatter.format(date)}</p>
             </div>
           </nav>
-        </div>
-        <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
+        {patientNumbers.length > 0 && (
+          <Tabs.Root
+            className="order-3 min-w-0 w-full lg:order-none lg:w-auto lg:flex-1"
+            value={selectedPatientNumber === null ? "all" : String(selectedPatientNumber)}
+            onValueChange={(value) => onSelectPatient(value === "all" ? null : Number(value))}
+          >
+            <div className="max-w-full overflow-x-auto rounded-xl bg-slate-100 p-1">
+              <Tabs.List aria-label="Фильтр расписания по пациенту" activateOnFocus className="flex min-w-max items-center gap-1">
+                <Tabs.Tab
+                  id="calendar-patient-tab-all"
+                  aria-controls="calendar-appointments-panel"
+                  value="all"
+                  className={patientTabClassName}
+                >
+                  Все пациенты
+                </Tabs.Tab>
+                {patientNumbers.map((patientNumber) => (
+                  <Tabs.Tab
+                    key={patientNumber}
+                    id={`calendar-patient-tab-${patientNumber}`}
+                    aria-controls="calendar-appointments-panel"
+                    value={String(patientNumber)}
+                    className={patientTabClassName}
+                  >
+                    Пациент {patientNumber}
+                  </Tabs.Tab>
+                ))}
+              </Tabs.List>
+            </div>
+          </Tabs.Root>
+        )}
+        <div className="ml-auto flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
           <Button className="h-10 rounded-xl px-3" disabled={isClearingSchedule} onClick={onClearSchedule} type="button" variant="destructive">
             Очистить расписание
           </Button>
@@ -61,36 +90,6 @@ export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSc
           </Button>
         </div>
       </section>
-      {patientNumbers.length > 0 && (
-        <Tabs.Root
-          value={selectedPatientNumber === null ? "all" : String(selectedPatientNumber)}
-          onValueChange={(value) => onSelectPatient(value === "all" ? null : Number(value))}
-        >
-          <div className="overflow-x-auto border-b border-slate-200 px-4 sm:px-6">
-            <Tabs.List aria-label="Фильтр расписания по пациенту" activateOnFocus className="flex min-w-max items-stretch gap-1">
-              <Tabs.Tab
-                id="calendar-patient-tab-all"
-                aria-controls="calendar-appointments-panel"
-                value="all"
-                className={patientTabClassName}
-              >
-                Все пациенты
-              </Tabs.Tab>
-              {patientNumbers.map((patientNumber) => (
-                <Tabs.Tab
-                  key={patientNumber}
-                  id={`calendar-patient-tab-${patientNumber}`}
-                  aria-controls="calendar-appointments-panel"
-                  value={String(patientNumber)}
-                  className={patientTabClassName}
-                >
-                  Пациент {patientNumber}
-                </Tabs.Tab>
-              ))}
-            </Tabs.List>
-          </div>
-        </Tabs.Root>
-      )}
     </div>
   )
 }
