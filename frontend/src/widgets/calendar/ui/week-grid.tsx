@@ -8,6 +8,7 @@ import {
     HOUR_HEIGHT,
 } from "@/shared/lib/calendar-date"
 import {Button} from "@/shared/ui/shadcn/button"
+import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle} from "@/shared/ui/shadcn/dialog"
 
 type WeekGridProps = {
     date: Date
@@ -47,7 +48,8 @@ function layoutOverlappingAppointments(appointments: Appointment[]) {
     const sortedAppointments = [...appointments].sort(
         (first, second) => new Date(first.startAt).getTime() - new Date(second.startAt).getTime(),
     )
-    const layouts = new Map<string, { column: number; columns: number }>()
+    const layouts = new Map<string, { column: number; columns: number; groupId: string }>()
+    const crowdedGroups: {id: string; appointments: Appointment[]; start: Date; end: Date}[] = []
     let group: Appointment[] = []
     let groupEnd = 0
 
@@ -64,9 +66,18 @@ function layoutOverlappingAppointments(appointments: Appointment[]) {
             placements.push({id: appointment.id, column})
         })
 
+        const groupId = group[0].id
         placements.forEach(({id, column}) =>
-            layouts.set(id, {column, columns: columnEnds.length}),
+            layouts.set(id, {column, columns: columnEnds.length, groupId}),
         )
+        if (columnEnds.length >= 4) {
+            crowdedGroups.push({
+                id: groupId,
+                appointments: [...group],
+                start: new Date(group[0].startAt),
+                end: new Date(Math.max(...group.map((item) => new Date(item.endAt).getTime()))),
+            })
+        }
         group = []
     }
 
@@ -79,7 +90,7 @@ function layoutOverlappingAppointments(appointments: Appointment[]) {
     })
     if (group.length > 0) placeGroup()
 
-    return layouts
+    return {layouts, crowdedGroups}
 }
 
 export function WeekGrid({
@@ -103,6 +114,7 @@ export function WeekGrid({
     const [selection, setSelection] = useState<{dayKey: string; startMinutes: number; endMinutes: number} | null>(null)
     const [draggedAppointmentId, setDraggedAppointmentId] = useState<string | null>(null)
     const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
+    const [selectedCluster, setSelectedCluster] = useState<{day: string; appointments: Appointment[]} | null>(null)
     const activeMove = useRef<AppointmentMove | null>(null)
     const dragPreviewRef = useRef<DragPreview | null>(null)
     const suppressAppointmentClick = useRef<string | null>(null)
@@ -403,7 +415,8 @@ export function WeekGrid({
                             const end = new Date(appointment.endAt)
                             return start < dayEnd && end > dayStart
                         })
-                        const appointmentLayouts = layoutOverlappingAppointments(dayAppointments)
+                        const {layouts: appointmentLayouts, crowdedGroups} = layoutOverlappingAppointments(dayAppointments)
+                        const crowdedIds = new Set(crowdedGroups.map((group) => group.id))
                         const isToday = currentTime !== null && dayKey === formatDateKey(currentTime)
 
                         return (
@@ -562,7 +575,9 @@ export function WeekGrid({
                                     const layout = appointmentLayouts.get(appointment.id) ?? {
                                         column: 0,
                                         columns: 1,
+                                        groupId: appointment.id,
                                     }
+                                    if (crowdedIds.has(layout.groupId)) return null
                                     const width = 100 / layout.columns
 
                                     const isMoving = draggedAppointmentId === appointment.id && dragPreview?.appointmentId === appointment.id
@@ -614,6 +629,35 @@ export function WeekGrid({
                                     )
                                 })}
 
+                                {crowdedGroups.map((group) => {
+                                    const visibleStart = group.start < dayStart ? dayStart : group.start
+                                    const visibleEnd = group.end > dayEnd ? dayEnd : group.end
+                                    if (visibleEnd <= visibleStart) return null
+                                    const startMinute = visibleStart.getHours() * 60 + visibleStart.getMinutes()
+                                    const endMinute = visibleEnd.getTime() === dayEnd.getTime()
+                                        ? displayEndHour * 60 : visibleEnd.getHours() * 60 + visibleEnd.getMinutes()
+                                    const height = Math.max(27, (endMinute - startMinute) * hourHeight / 60 - 4)
+                                    return (
+                                        <Button
+                                            key={group.id}
+                                            data-appointment-cluster
+                                            aria-label={`${group.appointments.length} сеансов, ${dayKey}, с ${timeLabel(visibleStart)} по ${timeLabel(visibleEnd)}. Показать список`}
+                                            className="absolute z-10 flex-col items-start justify-start overflow-hidden rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-left text-xs text-blue-950 shadow-sm transition-colors hover:bg-blue-100 focus-visible:ring-2 focus-visible:ring-blue-500"
+                                            style={{top: (startMinute - displayStartHour * 60) * hourHeight / 60, height, left: 4, right: 4, width: "calc(100% - 8px)"}}
+                                            type="button"
+                                            variant="ghost"
+                                            onClick={(event) => {
+                                                event.stopPropagation()
+                                                setSelectedCluster({day: dayKey, appointments: group.appointments})
+                                            }}
+                                        >
+                                            <span className="block w-full truncate font-semibold">{group.appointments.length} сеансов</span>
+                                            {height >= 48 && <span className="block truncate tabular-nums">{timeLabel(visibleStart)}–{timeLabel(visibleEnd)}</span>}
+                                            {height >= 76 && <span className="block truncate text-blue-700">Открыть список</span>}
+                                        </Button>
+                                    )
+                                })}
+
                                 {isToday && isCurrentTimeVisible && (
                                     <div
                                         className="pointer-events-none absolute left-0 right-0 z-10 border-t-2 border-red-500"
@@ -628,6 +672,38 @@ export function WeekGrid({
                 </div>
             </div>
         </div>
+        <Dialog open={selectedCluster !== null} onOpenChange={(open) => {if (!open) setSelectedCluster(null)}}>
+            <DialogContent className="sm:max-w-lg">
+                <DialogHeader>
+                    <DialogTitle>
+                        Процедуры на {selectedCluster?.day && new Date(`${selectedCluster.day}T12:00:00`).toLocaleDateString("ru-RU", {day: "numeric", month: "long", year: "numeric"})}
+                    </DialogTitle>
+                    <DialogDescription>
+                        {selectedCluster?.appointments.length ?? 0} сеансов в одно время. Выберите запись, чтобы посмотреть или изменить её.
+                    </DialogDescription>
+                </DialogHeader>
+                <div className="max-h-[60dvh] space-y-2 overflow-y-auto pr-1">
+                    {selectedCluster?.appointments.map((appointment) => (
+                        <Button
+                            key={appointment.id}
+                            type="button"
+                            variant="outline"
+                            className="h-auto min-h-14 w-full flex-col items-start gap-1 rounded-lg px-3 py-2 text-left whitespace-normal"
+                            onClick={() => {
+                                setSelectedCluster(null)
+                                onSelectAppointment(appointment)
+                            }}
+                        >
+                            <span className="font-semibold">{appointment.title}</span>
+                            <span className="text-xs text-slate-600 tabular-nums">
+                                {timeLabel(new Date(appointment.startAt))}–{timeLabel(new Date(appointment.endAt))}
+                                {appointment.room ? ` · Каб. ${appointment.room}` : ""}
+                            </span>
+                        </Button>
+                    ))}
+                </div>
+            </DialogContent>
+        </Dialog>
         {dragPreview && previewAppointment && typeof document !== "undefined" && createPortal(
             <div
                 aria-hidden="true"

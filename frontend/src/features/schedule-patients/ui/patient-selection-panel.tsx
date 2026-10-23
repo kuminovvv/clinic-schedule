@@ -71,8 +71,6 @@ export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, sele
             {procedures.length ? <div className="grid gap-2 xl:grid-cols-2">{procedures.map((procedure) => {
               const selected = selectedPlan.procedureIds.includes(procedure.id)
               const count = selectedPlan.procedureCounts[procedure.id] ?? 1
-              const intervalWarning = selected && procedure.minIntervalDays > selectedPlan.stayDays
-              const countWarning = selected && (count > selectedPlan.stayDays || (count - 1) * procedure.minIntervalDays >= selectedPlan.stayDays)
               return <div className="min-w-0 rounded-lg border border-slate-100 px-2 py-2 text-sm text-slate-700 hover:bg-slate-50" key={procedure.id}>
                 <div className="flex min-w-0 items-center gap-2">
                   <Switch aria-label={`Процедура: ${procedure.name}`} checked={selected} onCheckedChange={(checked) => onToggleProcedureAction(procedure.id, checked)} size="sm"/>
@@ -81,8 +79,6 @@ export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, sele
                     <Input aria-label={`Количество сеансов: ${procedure.name}`} className="h-8 w-16 rounded-md px-2 text-sm" type="number" step={1} min={1} max={365} value={count} onChange={(event) => onChangeProcedureCountAction(selectedPlan.patientNumber, procedure.id, Number(event.target.value))}/>
                   </Label>}
                 </div>
-                {intervalWarning && <p className="mt-1 text-xs text-amber-700" role="status">Интервал {procedure.minIntervalDays} дн. больше срока пребывания {selectedPlan.stayDays} дн.</p>}
-                {countWarning && <p className="mt-1 text-xs text-red-700" role="alert">Такое количество повторений не помещается в срок с заданным интервалом.</p>}
               </div>
             })}</div> : <p className="px-3 py-8 text-center text-sm text-slate-500">В каталоге пока нет процедур. Добавьте их в разделе «Каталог процедур».</p>}
           </div>

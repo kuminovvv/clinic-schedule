@@ -15,7 +15,6 @@ import {
 } from "@/shared/lib/calendar-date"
 import {getClientData, sendBackendRequest} from "@/shared/api/backend-client"
 import {notify} from "@/shared/lib/notifications"
-import {Button} from "@/shared/ui/shadcn/button"
 import {CalendarToolbar} from "./calendar-toolbar"
 import {ClearScheduleDialog} from "./clear-schedule-dialog"
 import {usePageDrivenScroll} from "@/shared/lib/hooks/use-page-driven-scroll"
@@ -214,7 +213,6 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
         }
     }
 
-    const handleRetryStorage = () => window.location.reload()
     const patientNumbers = [...new Set([
         ...appointments.flatMap((appointment) => appointment.patientNumber ? [appointment.patientNumber] : []),
         ...(selectedPatientNumber !== null ? [selectedPatientNumber] : []),
@@ -266,24 +264,6 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                         tabIndex={patientNumbers.length > 0 ? 0 : undefined}
                     >
                         <div className="h-full w-full">
-                            {storageError && (
-                                <p className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2 text-sm text-amber-900"
-                                   role="alert">
-                <span>
-                  {storageError === "read"
-                      ? "Не удалось загрузить записи. Проверьте соединение и попробуйте снова."
-                      : "Последнее изменение не сохранено. Исправьте данные или попробуйте ещё раз."}
-                </span>
-                                    <Button
-                                        className="h-auto shrink-0 rounded-lg px-2 py-1 font-medium underline underline-offset-2"
-                                        onClick={handleRetryStorage}
-                                        type="button"
-                                        variant="link"
-                                    >
-                                        Повторить
-                                    </Button>
-                                </p>
-                            )}
                             <div className="flex h-full flex-col">
                                 {!storageError && visibleAppointments.length === 0 && (
                                     <p className="border-b border-slate-200 bg-slate-50 px-5 py-2 text-sm text-slate-600" role="status">

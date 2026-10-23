@@ -17,7 +17,7 @@ type Props = {
 }
 
 export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Props) => {
-    const {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, saveError, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeStay, changeProcedureCount, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, validPlans, submit} = useSchedulePatients({procedures, initialPlan, dateKey})
+    const {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeStay, changeProcedureCount, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, validPlans, submit} = useSchedulePatients({procedures, initialPlan, dateKey})
     const view = tab
     return (
         <main
@@ -82,17 +82,6 @@ export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Pr
                         onUpdateProcedureAction={updateProcedure}
                         procedures={procedureDrafts}
                     />
-                )}
-                {view === "procedures" && !validProcedures && <p className="text-sm text-red-600" role="alert">Проверьте длительность (1–420 минут), интервал (1–365 дней), число процедур в неделю (1–7) и название кабинета (не более 80 символов).</p>}
-                {planConflict ? (
-                    <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-red-600" role="alert">
-                        <span>Данные изменились в другом окне. Чтобы избежать потери данных, сохранение остановлено.</span>
-                        <Button onClick={() => window.location.reload()} type="button" variant="outline">Обновить данные</Button>
-                    </div>
-                ) : saveError ? (
-                    <p className="mt-3 text-sm text-red-600" role="alert">Некоторые изменения не сохранились. Проверьте уведомление и попробуйте изменить данные ещё раз.</p>
-                ) : (
-                    <p className="sr-only" role="status">Изменения сохраняются автоматически.</p>
                 )}
             </section>
         </main>

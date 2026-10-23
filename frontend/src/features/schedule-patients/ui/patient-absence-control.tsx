@@ -70,7 +70,11 @@ export function PatientAbsenceControl({dateKey, patientNumber, stayDays}: {dateK
   }
 
   const submit = async () => {
-    if (busy || !valid) return
+    if (busy) return
+    if (!valid) {
+      notify.warning("Даты вне срока пребывания", `Выберите даты с ${displayDay(dateKey)} по ${displayDay(lastDay)}.`)
+      return
+    }
     setBusy(true)
     try {
       const result = await sendBackendRequest<AbsenceResult>("/v1/patient-absences", "POST", {
@@ -79,6 +83,8 @@ export function PatientAbsenceControl({dateKey, patientNumber, stayDays}: {dateK
       if (!result) throw new Error("Не удалось получить результат перепланирования")
       if (preview === null) {
         setPreview(result)
+        if (result.unscheduledCount > 0) notify.warning("Не все сеансы можно перенести", `Не помещаются в срок: ${result.unscheduledCount}. Измените даты или срок лечения.`)
+        if (result.warnings?.length) notify.warning("Проверьте перенос", result.warnings.join("\n"))
       } else {
         notify.success("Отсутствие учтено", `Перенесено сеансов: ${result.rescheduledCount}. Остальные пациенты и ручные изменения сохранены.`)
         setOpen(false)
@@ -123,13 +129,10 @@ export function PatientAbsenceControl({dateKey, patientNumber, stayDays}: {dateK
                 <Input type="date" className="h-10" min={from} max={lastDay} value={to} disabled={busy || preview !== null} onChange={(event) => setTo(event.target.value)}/>
               </Label>
             </div>
-            {!valid && <p className="text-sm text-red-700" role="alert">Выберите даты в пределах срока пребывания: {displayDay(dateKey)}–{displayDay(lastDay)}.</p>}
             {preview && (
-              <div className="space-y-1 rounded-lg bg-slate-50 p-3 text-sm" role="status">
+              <div className="space-y-1 rounded-lg bg-slate-50 p-3 text-sm">
                 <p className="font-medium">Предварительный результат</p>
                 <p>Затронуто сеансов: {preview.affectedCount}. Планируется перенести: {preview.rescheduledCount}.</p>
-                {preview.unscheduledCount > 0 && <p className="font-medium text-red-700" role="alert">Не помещаются в оставшийся срок: {preview.unscheduledCount}. Измените даты или срок лечения — расписание пока не изменено.</p>}
-                {preview.warnings?.map((warning, index) => <p className="text-amber-800" key={index}>{warning}</p>)}
                 {preview.unscheduledCount === 0 && <p className="text-xs text-slate-500">Подтвердите, чтобы сохранить отсутствие и обновить расписание.</p>}
               </div>
             )}

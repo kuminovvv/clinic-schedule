@@ -4,6 +4,7 @@ import {useRef, useState} from "react"
 import {Button} from "@/shared/ui/shadcn/button"
 import {Input} from "@/shared/ui/shadcn/input"
 import {Label} from "@/shared/ui/shadcn/label"
+import {notify} from "@/shared/lib/notifications"
 
 const dateLabel = new Intl.DateTimeFormat("ru-RU", {
   day: "numeric",
@@ -49,7 +50,10 @@ export function StayDurationControl({admissionDateKey, stayDays, onChange}: Stay
 
   const commitCustom = (value: string) => {
     const days = Number(value)
-    if (!/^\d+$/.test(value) || !Number.isSafeInteger(days) || days < 1 || days > 365) return
+    if (!/^\d+$/.test(value) || !Number.isSafeInteger(days) || days < 1 || days > 365) {
+      notify.warning("Некорректный срок пребывания", "Введите число дней от 1 до 365.")
+      return
+    }
     setDraft(null)
     if (days !== stayDays) onChange(days)
   }
@@ -102,7 +106,6 @@ export function StayDurationControl({admissionDateKey, stayDays, onChange}: Stay
             ref={customInput}
             id="patient-stay-days"
             aria-invalid={!customValid}
-            aria-describedby={!customValid ? "stay-days-error" : undefined}
             className="h-9 w-24 rounded-lg bg-white px-3 text-sm tabular-nums"
             inputMode="numeric"
             min={1}
@@ -121,7 +124,6 @@ export function StayDurationControl({admissionDateKey, stayDays, onChange}: Stay
               }
             }}
           />
-          {!customValid && <span className="text-xs text-red-700" id="stay-days-error" role="alert">От 1 до 365 дней</span>}
         </div>
       )}
       <p className="mt-3 text-xs text-slate-600" role="status">

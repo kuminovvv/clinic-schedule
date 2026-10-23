@@ -1,4 +1,5 @@
 import { Tabs } from "@base-ui/react/tabs"
+import {useRef, type PointerEvent as ReactPointerEvent} from "react"
 import {
   ArrowLeft01StandardIcon as ChevronLeft,
   ArrowRight01StandardIcon as ChevronRight,
@@ -28,6 +29,40 @@ const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
 const patientTabClassName = "flex h-8 shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-lg px-3 text-sm font-medium text-slate-600 outline-none transition-colors hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset data-active:bg-white data-active:text-slate-950 data-active:shadow-sm"
 
 export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSchedule, isClearingSchedule, patientNumbers, selectedPatientNumber, onSelectPatient }: CalendarToolbarProps) {
+  const tabsScroller = useRef<HTMLDivElement>(null)
+  const pointerDrag = useRef<{id: number; x: number; scrollLeft: number; moved: boolean; patient: number | null} | null>(null)
+  const suppressTabClick = useRef(false)
+
+  const startScroll = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType !== "mouse" || event.button !== 0) return
+    pointerDrag.current = {id: event.pointerId, x: event.clientX, scrollLeft: event.currentTarget.scrollLeft, moved: false, patient: selectedPatientNumber}
+  }
+  const moveScroll = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = pointerDrag.current
+    if (!gesture || gesture.id !== event.pointerId) return
+    const delta = event.clientX - gesture.x
+    if (!gesture.moved && Math.abs(delta) < 6) return
+    if (!gesture.moved) {
+      gesture.moved = true
+      event.currentTarget.setPointerCapture(event.pointerId)
+    }
+    event.currentTarget.scrollLeft = gesture.scrollLeft - delta
+  }
+  const finishScroll = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const gesture = pointerDrag.current
+    if (!gesture || gesture.id !== event.pointerId) return
+    if (gesture.moved) {
+      suppressTabClick.current = true
+      // Base UI may activate a focused tab on pointer-down. A drag must
+      // never change the active patient's calendar.
+      onSelectPatient(gesture.patient)
+      // Pointer capture can retarget the synthetic click to the scroller.
+      // Keep suppression through the click event, then release it.
+      window.setTimeout(() => {suppressTabClick.current = false}, 0)
+    }
+    pointerDrag.current = null
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId)
+  }
   return (
     <div className="bg-white">
       <section aria-label="Управление календарём" className="flex flex-wrap items-center gap-x-4 gap-y-3 border-b border-slate-200 bg-white px-4 py-3 sm:px-6">
@@ -52,9 +87,25 @@ export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSc
           <Tabs.Root
             className="order-3 min-w-0 w-full lg:order-none lg:w-auto lg:flex-1"
             value={selectedPatientNumber === null ? "all" : String(selectedPatientNumber)}
-            onValueChange={(value) => onSelectPatient(value === "all" ? null : Number(value))}
+            onValueChange={(value) => {
+              if (pointerDrag.current?.moved || suppressTabClick.current) return
+              onSelectPatient(value === "all" ? null : Number(value))
+            }}
           >
-            <div className="max-w-full overflow-x-auto rounded-xl bg-slate-100 p-1">
+            <div
+              ref={tabsScroller}
+              className="max-w-full cursor-grab select-none overflow-x-auto rounded-xl bg-slate-100 p-1 active:cursor-grabbing [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+              onPointerDown={startScroll}
+              onPointerMove={moveScroll}
+              onPointerUp={finishScroll}
+              onPointerCancel={finishScroll}
+              onClickCapture={(event) => {
+                if (!suppressTabClick.current) return
+                event.preventDefault()
+                event.stopPropagation()
+                suppressTabClick.current = false
+              }}
+            >
               <Tabs.List aria-label="Фильтр расписания по пациенту" activateOnFocus className="flex min-w-max items-center gap-1">
                 <Tabs.Tab
                   id="calendar-patient-tab-all"

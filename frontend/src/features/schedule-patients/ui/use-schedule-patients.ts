@@ -70,6 +70,7 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
                     if (error instanceof BackendRequestError && error.status === 409) {
                         planConflictRef.current = true
                         setPlanConflict(true)
+                        notify.error("Данные изменились в другом окне", "Автосохранение остановлено, чтобы не потерять изменения. Обновите страницу.")
                     }
                 }
             })
@@ -93,6 +94,24 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
         setPlans((all) => all.map((plan) => plan.patientNumber === patientNumber ? {...plan, severity} : plan))
     const changeStay = (patientNumber: number, stayDays: number) => {
         if (!Number.isInteger(stayDays) || stayDays < 1 || stayDays > 365) return
+        const selected = plans.find((plan) => plan.patientNumber === patientNumber)
+        if (selected) {
+            for (const id of selected.procedureIds) {
+                const procedure = procedureDrafts.find((item) => item.id === id)
+                if (!procedure) continue
+                const existing = selected.procedureCounts[id] ?? 1
+                const defaultBefore = Math.max(1, Math.ceil(selected.stayDays * procedure.defaultWeeklyCount / 7))
+                const count = existing === defaultBefore ? Math.max(1, Math.ceil(stayDays * procedure.defaultWeeklyCount / 7)) : existing
+                if (count > stayDays || (count - 1) * procedure.minIntervalDays >= stayDays) {
+                    notify.warning("Назначения не помещаются в новый срок", `Пациент ${patientNumber}: ${count} сеансов «${procedure.name}» с интервалом ${procedure.minIntervalDays} дн. не помещаются в ${stayDays} дн.`)
+                    break
+                }
+                if (procedure.minIntervalDays > stayDays) {
+                    notify.warning("Интервал длиннее срока пребывания", `Пациент ${patientNumber}: у процедуры «${procedure.name}» интервал ${procedure.minIntervalDays} дн., а срок ${stayDays} дн.`)
+                    break
+                }
+            }
+        }
         setPlans((all) => all.map((plan) => {
             if (plan.patientNumber !== patientNumber) return plan
             const procedureCounts = {...plan.procedureCounts}
@@ -107,10 +126,28 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
     }
     const changeProcedureCount = (patientNumber: number, procedureId: string, count: number) => {
         if (!Number.isInteger(count) || count < 1 || count > 365) return
+        const patient = plans.find((item) => item.patientNumber === patientNumber)
+        const procedure = procedureDrafts.find((item) => item.id === procedureId)
+        if (patient && procedure && (count > patient.stayDays || (count - 1) * procedure.minIntervalDays >= patient.stayDays)) {
+            notify.warning("Сеансы не помещаются в курс", `Пациент ${patientNumber}: ${count} повторений «${procedure.name}» не укладываются в ${patient.stayDays} дн. с интервалом ${procedure.minIntervalDays} дн.`)
+        }
         setPlans((all) => all.map((plan) => plan.patientNumber === patientNumber
             ? {...plan, procedureCounts: {...plan.procedureCounts, [procedureId]: count}} : plan))
     }
-    const toggleProcedure = (procedureId: string, checked: boolean) => setPlans((all) => all.map((plan) => {
+    const toggleProcedure = (procedureId: string, checked: boolean) => {
+        if (checked) {
+            const patient = plans.find((item) => item.patientNumber === selectedPatientNumber)
+            const procedure = procedureDrafts.find((item) => item.id === procedureId)
+            if (patient && procedure) {
+                const count = Math.max(1, Math.ceil(patient.stayDays * procedure.defaultWeeklyCount / 7))
+                if (count > patient.stayDays || (count - 1) * procedure.minIntervalDays >= patient.stayDays) {
+                    notify.warning("Сеансы не помещаются в курс", `Пациент ${patient.patientNumber}: ${count} повторений «${procedure.name}» не укладываются в ${patient.stayDays} дн.`)
+                } else if (procedure.minIntervalDays > patient.stayDays) {
+                    notify.warning("Интервал длиннее срока пребывания", `У процедуры «${procedure.name}» интервал ${procedure.minIntervalDays} дн., а курс длится ${patient.stayDays} дн.`)
+                }
+            }
+        }
+        setPlans((all) => all.map((plan) => {
         if (plan.patientNumber !== selectedPatientNumber) return plan
         const procedureIds = checked ? [...plan.procedureIds, procedureId] : plan.procedureIds.filter((id) => id !== procedureId)
         const procedureCounts = {...plan.procedureCounts}
@@ -119,7 +156,8 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
             procedureCounts[procedureId] = Math.max(1, Math.ceil(plan.stayDays * (procedure?.defaultWeeklyCount ?? 1) / 7))
         } else delete procedureCounts[procedureId]
         return {...plan, procedureIds, procedureCounts}
-    }))
+        }))
+    }
     const persistProcedureDrafts = (nextProcedures: Procedure[]) => {
         setProcedureDrafts(nextProcedures)
         procedureSaveQueue.current = procedureSaveQueue.current.then(async () => {
@@ -169,6 +207,11 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
         Number.isInteger(procedure.defaultWeeklyCount) && procedure.defaultWeeklyCount >= 1 && procedure.defaultWeeklyCount <= 7 &&
         (procedure.room === undefined || procedure.room.trim().length <= 80),
     )
+    useEffect(() => {
+        if (!validProcedures) {
+            notify.warning("Проверьте параметры процедур", "Длительность: 1–420 мин, интервал: 1–365 дней, количество в неделю: 1–7, кабинет: не более 80 символов.")
+        }
+    }, [validProcedures])
     const validPlans = plans.every((plan) => Number.isInteger(plan.stayDays) && plan.stayDays >= 1 && plan.stayDays <= 365 &&
         plan.procedureIds.every((id) => Number.isInteger(plan.procedureCounts[id]) && plan.procedureCounts[id] >= 1 && plan.procedureCounts[id] <= plan.stayDays))
     const finishGeneration = async () => {
