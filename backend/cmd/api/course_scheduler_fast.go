@@ -87,17 +87,21 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 		for _, slot := range occupied {
 			// Patient numbers are local to each admission; a different
 			// admission's number must not block this patient's calendar.
-			if slot.patient != nil && *slot.patient != patient {
+			sameAdmission := slot.patient != nil && *slot.patient == patient && (slot.sourcePlanDate == "" || slot.sourcePlanDate == planKey)
+			if !sameAdmission && slot.patient != nil && slot.room == "" {
 				continue
 			}
-			if slot.patient != nil && slot.sourcePlanDate != "" && slot.sourcePlanDate != planKey {
-				continue
+			if !sameAdmission && slot.patient != nil {
+				// An identical temporary patient number from a different
+				// admission is not this patient, only its room is reserved.
+				outsidePatient := 0
+				slot.patient = &outsidePatient
 			}
 			index := int(calendarDayNumber(slot.start) - calendarDayNumber(start))
 			if index >= 0 && index < len(days) {
 				days[index].occupied = append(days[index].occupied, slot)
 			}
-			if slot.patient != nil && slot.procedureID != "" {
+			if sameAdmission && slot.procedureID != "" {
 				fixed[slot.procedureID] = append(fixed[slot.procedureID], index)
 			}
 		}
@@ -229,6 +233,16 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 				return result, fmt.Errorf("fast scheduler could not fit the verified calendar day")
 			}
 			result.Appointments = append(result.Appointments, daily.Appointments...)
+			for _, item := range daily.Appointments {
+				if item.Room == "" {
+					continue
+				}
+				begin, _ := time.ParseInLocation("2006-01-02T15:04", item.StartAt, time.Local)
+				finish, _ := time.ParseInLocation("2006-01-02T15:04", item.EndAt, time.Local)
+				assigned := patient
+				occupied = append(occupied, timeSlot{start: begin, end: finish, patient: &assigned,
+					procedureID: item.ProcedureID, sourcePlanDate: planKey, room: item.Room})
+			}
 		}
 		for _, item := range assigned {
 			if missing := item.count - len(placed[item.id]); missing > 0 {

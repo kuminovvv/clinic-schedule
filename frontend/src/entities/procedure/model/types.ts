@@ -7,4 +7,6 @@ export type Procedure = {
   isRelaxing: boolean
   minIntervalDays: number
   defaultWeeklyCount: number
+  /** Optional dedicated office; absent/empty means organization-wide. */
+  room?: string
 }

@@ -192,7 +192,7 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
         const isValidTime = canScheduleAt(calendarSettings.workWeek, start, end)
         const hasConflict = appointments.some((appointment) =>
             appointment.id !== id && appointment.status !== "cancelled" &&
-            (existing.patientNumber == null || appointment.patientNumber == null || (existing.patientNumber === appointment.patientNumber && (!existing.sourcePlanDate || !appointment.sourcePlanDate || existing.sourcePlanDate === appointment.sourcePlanDate))) &&
+            (existing.patientNumber == null || appointment.patientNumber == null || (existing.patientNumber === appointment.patientNumber && (!existing.sourcePlanDate || !appointment.sourcePlanDate || existing.sourcePlanDate === appointment.sourcePlanDate)) || (existing.room?.trim() && appointment.room?.trim() && existing.room.trim().toLocaleLowerCase() === appointment.room.trim().toLocaleLowerCase())) &&
             start < new Date(appointment.endAt) && end > new Date(appointment.startAt),
         )
         if (!isValidTime || hasConflict) {

@@ -26,6 +26,7 @@ type timeSlot struct {
 	patient        *int
 	procedureID    string
 	sourcePlanDate string
+	room           string
 }
 
 func createSchedule(day time.Time, input []scheduleTask, procedures map[string]procedure, settings settings, occupied []timeSlot) (scheduleResponse, error) {
@@ -106,7 +107,8 @@ func createSchedule(day time.Time, input []scheduleTask, procedures map[string]p
 				color = "teal"
 			}
 			patient := task.patient
-			appointments = append(appointments, appointment{ID: id, Title: fmt.Sprintf("Пациент %d · %s", patient, task.procedure.Name), StartAt: start.Format("2006-01-02T15:04"), EndAt: end.Format("2006-01-02T15:04"), Description: fmt.Sprintf("%d мин + %d мин подготовка", task.procedure.DurationMinutes, task.procedure.PreparationMinutes), Color: color, Status: "scheduled", GeneratedByPlanner: true, PatientNumber: &patient, ProcedureID: task.procedure.ID})
+			appointments = append(appointments, appointment{ID: id, Title: fmt.Sprintf("Пациент %d · %s", patient, task.procedure.Name), StartAt: start.Format("2006-01-02T15:04"), EndAt: end.Format("2006-01-02T15:04"), Description: fmt.Sprintf("%d мин + %d мин подготовка", task.procedure.DurationMinutes, task.procedure.PreparationMinutes), Color: color, Status: "scheduled", GeneratedByPlanner: true, PatientNumber: &patient, ProcedureID: task.procedure.ID, Room: task.procedure.Room})
+			occupied = append(occupied, timeSlot{start: start, end: end, patient: &patient, room: task.procedure.Room})
 		}
 	}
 	return scheduleResponse{Appointments: appointments, ScheduledCount: len(appointments), UnscheduledCount: len(unscheduled), UnscheduledPatients: uniqueInts(unscheduled)}, nil
@@ -136,7 +138,7 @@ func findPatientSlots(dayStart, workEnd time.Time, blocks []timeSlot, tasks []sc
 					}
 				}
 				for _, slot := range occupied {
-					if (slot.patient == nil || *slot.patient == patient) && cursor.Before(slot.end) && cursor.Add(duration).After(slot.start) &&
+					if (slot.patient == nil || *slot.patient == patient || (task.procedure.Room != "" && sameRoom(slot.room, task.procedure.Room))) && cursor.Before(slot.end) && cursor.Add(duration).After(slot.start) &&
 						(conflictEnd.IsZero() || slot.end.Before(conflictEnd)) {
 						conflictEnd = slot.end
 						conflictWasOccupied = true

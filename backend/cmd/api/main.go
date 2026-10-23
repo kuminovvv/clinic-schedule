@@ -30,6 +30,7 @@ type appointment struct {
 	PatientNumber      *int   `json:"patientNumber,omitempty"`
 	ProcedureID        string `json:"procedureId,omitempty"`
 	SourcePlanDate     string `json:"sourcePlanDate,omitempty"`
+	Room               string `json:"room,omitempty"`
 }
 
 type procedure struct {
@@ -40,6 +41,7 @@ type procedure struct {
 	IsRelaxing         bool   `json:"isRelaxing"`
 	MinIntervalDays    int    `json:"minIntervalDays"`
 	DefaultWeeklyCount int    `json:"defaultWeeklyCount"`
+	Room               string `json:"room,omitempty"`
 }
 
 type settings struct {
@@ -244,7 +246,7 @@ func (s *server) listAppointments(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "to must be after from, within 32 days")
 		return
 	}
-	rows, err := s.db.Query(r.Context(), `SELECT id, title, to_char(start_at, 'YYYY-MM-DD"T"HH24:MI'), to_char(end_at, 'YYYY-MM-DD"T"HH24:MI'), description, color, status, generated_by_planner, manually_modified, patient_number,COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),'') FROM appointments WHERE start_at >= $1 AND start_at < $2 ORDER BY start_at`, from, to)
+	rows, err := s.db.Query(r.Context(), `SELECT id, title, to_char(start_at, 'YYYY-MM-DD"T"HH24:MI'), to_char(end_at, 'YYYY-MM-DD"T"HH24:MI'), description, color, status, generated_by_planner, manually_modified, patient_number,COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),''),room FROM appointments WHERE start_at >= $1 AND start_at < $2 ORDER BY start_at`, from, to)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load appointments")
 		return
@@ -253,7 +255,7 @@ func (s *server) listAppointments(w http.ResponseWriter, r *http.Request) {
 	items := make([]appointment, 0)
 	for rows.Next() {
 		var item appointment
-		if err := rows.Scan(&item.ID, &item.Title, &item.StartAt, &item.EndAt, &item.Description, &item.Color, &item.Status, &item.GeneratedByPlanner, &item.ManuallyModified, &item.PatientNumber, &item.ProcedureID, &item.SourcePlanDate); err != nil {
+		if err := rows.Scan(&item.ID, &item.Title, &item.StartAt, &item.EndAt, &item.Description, &item.Color, &item.Status, &item.GeneratedByPlanner, &item.ManuallyModified, &item.PatientNumber, &item.ProcedureID, &item.SourcePlanDate, &item.Room); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not decode appointments")
 			return
 		}
@@ -273,7 +275,7 @@ func (s *server) saveAppointment(w http.ResponseWriter, r *http.Request) {
 	}
 	item.ID = r.PathValue("id")
 	item.ManuallyModified = item.ManuallyModified || !item.GeneratedByPlanner
-	if !validAppointment(item) {
+	if !validAppointment(item) || !validRoom(item.Room) {
 		writeError(w, http.StatusBadRequest, "invalid appointment")
 		return
 	}
@@ -288,6 +290,10 @@ func (s *server) saveAppointment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(r.Context())
+	if _, err = tx.Exec(r.Context(), "SELECT pg_advisory_xact_lock(hashtext('clinic-schedule-room-appointments'))"); err != nil {
+		writeError(w, 500, "could not lock room occupancy")
+		return
+	}
 	if _, err = tx.Exec(r.Context(), "SELECT pg_advisory_xact_lock(hashtext($1))", item.StartAt[:10]); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not lock appointment day")
 		return
@@ -359,7 +365,7 @@ func (s *server) saveAppointment(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	var conflict bool
-	err = tx.QueryRow(r.Context(), "SELECT EXISTS (SELECT 1 FROM appointments WHERE id <> $1 AND status <> 'cancelled' AND start_at < $3 AND end_at > $2 AND ($4::integer IS NULL OR patient_number IS NULL OR (patient_number=$4 AND ($5::text='' OR source_plan_date IS NULL OR source_plan_date=$5::date))))", item.ID, start, end, item.PatientNumber, sourcePlanDate).Scan(&conflict)
+	err = tx.QueryRow(r.Context(), "SELECT EXISTS (SELECT 1 FROM appointments WHERE id <> $1 AND status <> 'cancelled' AND start_at < $3 AND end_at > $2 AND ($4::integer IS NULL OR patient_number IS NULL OR (patient_number=$4 AND ($5::text='' OR source_plan_date IS NULL OR source_plan_date=$5::date)) OR ($6::text<>'' AND lower(btrim(room))=lower(btrim($6)))))", item.ID, start, end, item.PatientNumber, sourcePlanDate, strings.TrimSpace(item.Room)).Scan(&conflict)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not validate appointment time")
 		return
@@ -368,7 +374,7 @@ func (s *server) saveAppointment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "appointment time is already occupied")
 		return
 	}
-	_, err = tx.Exec(r.Context(), `INSERT INTO appointments (id,title,start_at,end_at,description,color,status,generated_by_planner,manually_modified,patient_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,description=EXCLUDED.description,color=EXCLUDED.color,status=EXCLUDED.status,generated_by_planner=EXCLUDED.generated_by_planner,manually_modified=appointments.manually_modified OR EXCLUDED.manually_modified OR (appointments.generated_by_planner AND (appointments.title<>EXCLUDED.title OR appointments.start_at<>EXCLUDED.start_at OR appointments.end_at<>EXCLUDED.end_at OR appointments.description<>EXCLUDED.description OR appointments.color<>EXCLUDED.color)),patient_number=EXCLUDED.patient_number,updated_at=now()`, item.ID, item.Title, item.StartAt, item.EndAt, item.Description, item.Color, item.Status, item.GeneratedByPlanner, item.ManuallyModified, item.PatientNumber)
+	_, err = tx.Exec(r.Context(), `INSERT INTO appointments (id,title,start_at,end_at,description,color,status,generated_by_planner,manually_modified,patient_number,room) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,start_at=EXCLUDED.start_at,end_at=EXCLUDED.end_at,description=EXCLUDED.description,color=EXCLUDED.color,room=EXCLUDED.room,status=EXCLUDED.status,generated_by_planner=EXCLUDED.generated_by_planner,manually_modified=appointments.manually_modified OR EXCLUDED.manually_modified OR (appointments.generated_by_planner AND (appointments.title<>EXCLUDED.title OR appointments.start_at<>EXCLUDED.start_at OR appointments.end_at<>EXCLUDED.end_at OR appointments.description<>EXCLUDED.description OR appointments.color<>EXCLUDED.color OR appointments.room<>EXCLUDED.room)),patient_number=EXCLUDED.patient_number,updated_at=now()`, item.ID, item.Title, item.StartAt, item.EndAt, item.Description, item.Color, item.Status, item.GeneratedByPlanner, item.ManuallyModified, item.PatientNumber, strings.TrimSpace(item.Room))
 	if err != nil {
 		writeError(w, http.StatusConflict, "could not save appointment")
 		return
@@ -438,7 +444,7 @@ func (s *server) clearSchedules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listProcedures(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count FROM procedures ORDER BY id")
+	rows, err := s.db.Query(r.Context(), "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,room FROM procedures ORDER BY id")
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load procedures")
 		return
@@ -447,7 +453,7 @@ func (s *server) listProcedures(w http.ResponseWriter, r *http.Request) {
 	items := make([]procedure, 0)
 	for rows.Next() {
 		var item procedure
-		if err := rows.Scan(&item.ID, &item.Name, &item.DurationMinutes, &item.PreparationMinutes, &item.IsRelaxing, &item.MinIntervalDays, &item.DefaultWeeklyCount); err != nil {
+		if err := rows.Scan(&item.ID, &item.Name, &item.DurationMinutes, &item.PreparationMinutes, &item.IsRelaxing, &item.MinIntervalDays, &item.DefaultWeeklyCount, &item.Room); err != nil {
 			writeError(w, http.StatusInternalServerError, "could not decode procedures")
 			return
 		}
@@ -476,11 +482,11 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(r.Context())
 	for _, item := range items {
-		if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Name) == "" || len([]rune(item.Name)) > 480 || item.DurationMinutes < 1 || item.DurationMinutes > 420 || item.PreparationMinutes < 0 || item.PreparationMinutes > 419 || item.DurationMinutes+item.PreparationMinutes > 420 || item.MinIntervalDays < 1 || item.MinIntervalDays > 365 || item.DefaultWeeklyCount < 1 || item.DefaultWeeklyCount > 7 {
+		if strings.TrimSpace(item.ID) == "" || strings.TrimSpace(item.Name) == "" || len([]rune(item.Name)) > 480 || item.DurationMinutes < 1 || item.DurationMinutes > 420 || item.PreparationMinutes < 0 || item.PreparationMinutes > 419 || item.DurationMinutes+item.PreparationMinutes > 420 || item.MinIntervalDays < 1 || item.MinIntervalDays > 365 || item.DefaultWeeklyCount < 1 || item.DefaultWeeklyCount > 7 || !validRoom(item.Room) {
 			writeError(w, 400, "invalid procedure")
 			return
 		}
-		_, err = tx.Exec(r.Context(), "INSERT INTO procedures (id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,duration_minutes=EXCLUDED.duration_minutes,preparation_minutes=EXCLUDED.preparation_minutes,is_relaxing=EXCLUDED.is_relaxing,min_interval_days=EXCLUDED.min_interval_days,default_weekly_count=EXCLUDED.default_weekly_count,updated_at=now()", item.ID, strings.TrimSpace(item.Name), item.DurationMinutes, item.PreparationMinutes, item.IsRelaxing, item.MinIntervalDays, item.DefaultWeeklyCount)
+		_, err = tx.Exec(r.Context(), "INSERT INTO procedures (id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,room) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,duration_minutes=EXCLUDED.duration_minutes,preparation_minutes=EXCLUDED.preparation_minutes,is_relaxing=EXCLUDED.is_relaxing,min_interval_days=EXCLUDED.min_interval_days,default_weekly_count=EXCLUDED.default_weekly_count,room=EXCLUDED.room,updated_at=now()", item.ID, strings.TrimSpace(item.Name), item.DurationMinutes, item.PreparationMinutes, item.IsRelaxing, item.MinIntervalDays, item.DefaultWeeklyCount, strings.TrimSpace(item.Room))
 		if err != nil {
 			writeError(w, 500, "could not save procedures")
 			return
@@ -778,6 +784,10 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
+	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext('clinic-schedule-room-appointments'))"); err != nil {
+		writeError(w, 500, "could not lock room occupancy")
+		return
+	}
 	if _, err = tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", input.Date); err != nil {
 		writeError(w, 500, "could not lock schedule")
 		return
@@ -798,7 +808,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not replace generated schedule")
 		return
 	}
-	occupiedRows, err := tx.Query(ctx, "SELECT start_at,end_at,patient_number,COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),'') FROM appointments WHERE status <> 'cancelled' AND start_at >= $1 AND start_at < $2", day.AddDate(0, 0, -365), endDate)
+	occupiedRows, err := tx.Query(ctx, "SELECT start_at,end_at,patient_number,COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),''),room FROM appointments WHERE status <> 'cancelled' AND start_at >= $1 AND start_at < $2", day.AddDate(0, 0, -365), endDate)
 	if err != nil {
 		writeError(w, 500, "could not load existing appointments")
 		return
@@ -806,7 +816,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 	occupied := make([]timeSlot, 0)
 	for occupiedRows.Next() {
 		var slot timeSlot
-		if err = occupiedRows.Scan(&slot.start, &slot.end, &slot.patient, &slot.procedureID, &slot.sourcePlanDate); err != nil {
+		if err = occupiedRows.Scan(&slot.start, &slot.end, &slot.patient, &slot.procedureID, &slot.sourcePlanDate, &slot.room); err != nil {
 			occupiedRows.Close()
 			writeError(w, 500, "could not read existing appointments")
 			return
@@ -821,7 +831,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	occupiedRows.Close()
-	rows, err := tx.Query(ctx, "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count FROM procedures")
+	rows, err := tx.Query(ctx, "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,room FROM procedures")
 	if err != nil {
 		writeError(w, 500, "could not load procedures")
 		return
@@ -829,7 +839,7 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 	procedureMap := map[string]procedure{}
 	for rows.Next() {
 		var p procedure
-		if err = rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.PreparationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount); err != nil {
+		if err = rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.PreparationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount, &p.Room); err != nil {
 			rows.Close()
 			writeError(w, 500, "could not load procedures")
 			return
@@ -976,8 +986,8 @@ func (s *server) generate(w http.ResponseWriter, r *http.Request) {
 		// still run in the same serializable transaction and roll back together.
 		batch := &pgx.Batch{}
 		for _, item := range result.Appointments {
-			batch.Queue("INSERT INTO appointments (id,title,start_at,end_at,description,color,status,generated_by_planner,manually_modified,patient_number,source_plan_date,source_procedure_id) VALUES ($1,$2,$3,$4,$5,$6,'scheduled',true,false,$7,$8,$9)",
-				item.ID, item.Title, item.StartAt, item.EndAt, item.Description, item.Color, item.PatientNumber, input.Date, item.ProcedureID)
+			batch.Queue("INSERT INTO appointments (id,title,start_at,end_at,description,color,status,generated_by_planner,manually_modified,patient_number,source_plan_date,source_procedure_id,room) VALUES ($1,$2,$3,$4,$5,$6,'scheduled',true,false,$7,$8,$9,$10)",
+				item.ID, item.Title, item.StartAt, item.EndAt, item.Description, item.Color, item.PatientNumber, input.Date, item.ProcedureID, item.Room)
 		}
 		batchResults := tx.SendBatch(ctx, batch)
 		for range result.Appointments {

@@ -83,7 +83,7 @@ export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Pr
                         procedures={procedureDrafts}
                     />
                 )}
-                {view === "procedures" && !validProcedures && <p className="text-sm text-red-600" role="alert">Проверьте длительность (1–420 минут), интервал (1–365 дней) и число процедур в неделю (1–7).</p>}
+                {view === "procedures" && !validProcedures && <p className="text-sm text-red-600" role="alert">Проверьте длительность (1–420 минут), интервал (1–365 дней), число процедур в неделю (1–7) и название кабинета (не более 80 символов).</p>}
                 {planConflict ? (
                     <div className="mt-3 flex flex-wrap items-center gap-3 text-sm text-red-600" role="alert">
                         <span>Данные изменились в другом окне. Чтобы избежать потери данных, сохранение остановлено.</span>

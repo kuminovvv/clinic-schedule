@@ -594,6 +594,7 @@ export function WeekGrid({
                                                 <span className="calendar-appointment-time tabular-nums">
                                                     {timeLabel(displayedStart)} – {timeLabel(displayedEnd)}
                                                 </span>
+                                                {appointment.room && <span className="block truncate text-[10px] opacity-80">Каб. {appointment.room}</span>}
                                             </span>
                                             {appointment.status !== "cancelled" && (
                                                 <>

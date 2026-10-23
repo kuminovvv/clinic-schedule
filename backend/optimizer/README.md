@@ -9,8 +9,17 @@
   stays up to **365 days**, instead of the CP-SAT prototype's 80/31 cap.
 - Balances the number of sessions between available days, packs the patient's
   sessions into reasonably short visits, respects work windows, closures,
-  absences, manual sessions, minimum repetition intervals, the catalog's
+  absences, manual sessions, optional **room occupancy**, minimum repetition intervals, the catalog's
   rolling seven-day maximum and severity-specific relaxing-first ordering.
+- Each procedure can specify a room (e.g., `101` or `Массажный`) in the procedure
+  catalog. An empty room preserves the original organization-wide behavior:
+  concurrent patients are allowed unless they share a dedicated room or the
+  appointment reserves the whole organization. Appointments store a snapshot
+  of their assigned room, so later catalog edits do not silently move booked
+  visits. Manual calendar entries may also have a room.
+- Room scheduling models one shared resource per named room, not a particular
+  doctor. Doctors' individual availability and room reassignment remain
+  future capabilities, requiring separate data models.
 - Reports unscheduled sessions when no valid slot exists rather than violating
   restrictions. Like CP-SAT, it has **no knowledge of doctors, rooms or equipment**
   because those are not modeled by the application.

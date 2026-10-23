@@ -17,6 +17,11 @@ foreach ($line in Get-Content -LiteralPath $envFile) {
     }
     [Environment]::SetEnvironmentVariable($name, $value, 'Process')
 }
+# Avoid clobbering another application's local port. The override is only
+# passed by the parent shell and is not persisted to the .env.local file.
+if ($env:CLINIC_LOCAL_LISTEN_ADDR) {
+    $env:LISTEN_ADDR = $env:CLINIC_LOCAL_LISTEN_ADDR
+}
 $env:CLINIC_COURSE_OPTIMIZER = 'fast'
 $python = Join-Path $backend '.venv-cpsat\Scripts\python.exe'
 # CP-SAT remains opt-in for comparison; the fast scheduler runs in Go and

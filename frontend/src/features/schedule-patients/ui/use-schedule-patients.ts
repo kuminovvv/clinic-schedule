@@ -143,6 +143,7 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
             isRelaxing: false,
             minIntervalDays: 1,
             defaultWeeklyCount: 1,
+            room: "",
         },
     ])
     const removeProcedure = (id: string) => {
@@ -165,7 +166,8 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
         procedure.name.trim() && Number.isInteger(procedure.durationMinutes) && procedure.durationMinutes >= 1 && procedure.durationMinutes <= 420 &&
         Number.isInteger(procedure.preparationMinutes) && procedure.preparationMinutes >= 0 && procedure.durationMinutes + procedure.preparationMinutes <= 420 &&
         Number.isInteger(procedure.minIntervalDays) && procedure.minIntervalDays >= 1 && procedure.minIntervalDays <= 365 &&
-        Number.isInteger(procedure.defaultWeeklyCount) && procedure.defaultWeeklyCount >= 1 && procedure.defaultWeeklyCount <= 7,
+        Number.isInteger(procedure.defaultWeeklyCount) && procedure.defaultWeeklyCount >= 1 && procedure.defaultWeeklyCount <= 7 &&
+        (procedure.room === undefined || procedure.room.trim().length <= 80),
     )
     const validPlans = plans.every((plan) => Number.isInteger(plan.stayDays) && plan.stayDays >= 1 && plan.stayDays <= 365 &&
         plan.procedureIds.every((id) => Number.isInteger(plan.procedureCounts[id]) && plan.procedureCounts[id] >= 1 && plan.procedureCounts[id] <= plan.stayDays))

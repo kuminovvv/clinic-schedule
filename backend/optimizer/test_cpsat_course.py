@@ -91,6 +91,16 @@ class CourseSATTest(unittest.TestCase):
         self.assertEqual(output["scheduledCount"], 2)
         self.assertEqual(output["appointments"][0]["procedureId"], "p1")
 
+    def test_same_room_cannot_be_double_booked(self):
+        data = fixture(counts=(1,), stay=1)
+        second = {**data["plans"][0], "patientNumber": 2}
+        data["plans"].append(second)
+        data["procedures"]["p0"]["room"] = "101"
+        result = solve(data)
+        self.assertEqual(result["scheduledCount"], 2)
+        first, second = result["appointments"]
+        self.assertTrue(first["endAt"] <= second["startAt"] or second["endAt"] <= first["startAt"])
+
 
 if __name__ == "__main__":
     unittest.main()

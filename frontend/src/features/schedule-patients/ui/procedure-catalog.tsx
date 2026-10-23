@@ -17,7 +17,7 @@ const NUMBER_LIMITS = {
   defaultWeeklyCount: {min: 1, max: 7},
 } as const
 
-const catalogColumns = "xl:grid-cols-[minmax(12rem,1fr)_9rem_10rem_10rem_9rem_11rem_2.25rem]"
+const catalogColumns = "2xl:grid-cols-[minmax(12rem,1fr)_7rem_8rem_7rem_7rem_9rem_9rem_2.25rem]"
 
 const COLUMN_HELP = {
   duration: {
@@ -39,6 +39,10 @@ const COLUMN_HELP = {
   relaxing: {
     label: "Расслабляющая",
     description: "Признак расслабляющей процедуры. При составлении курса для пациентов с высоким приоритетом такие процедуры размещаются раньше остальных и выделяются бирюзовым цветом в календаре.",
+  },
+  room: {
+    label: "Кабинет",
+    description: "Необязательный кабинет процедуры, например 101 или Массажный. Если оставить пустым, процедура доступна по общему графику организации. При указании кабинета он не может быть занят двумя пациентами одновременно.",
   },
 } as const
 
@@ -121,15 +125,17 @@ export const ProcedureCatalog = (props: ProcedureCatalogProps) => {
           <ProcedureColumnHelp field="preparation" />
           <ProcedureColumnHelp field="interval" />
           <ProcedureColumnHelp field="weekly" />
+          <ProcedureColumnHelp field="room" />
           <ProcedureColumnHelp field="relaxing" />
           <span className="sr-only">Удалить</span>
         </div>}
         {procedures.length > 0 && (
-          <div aria-label="Пояснения к параметрам процедур" className="grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 border-b border-slate-200 px-3 py-2 sm:grid-cols-5 xl:hidden">
+          <div aria-label="Пояснения к параметрам процедур" className="grid shrink-0 grid-cols-2 gap-x-4 gap-y-1 border-b border-slate-200 px-3 py-2 sm:grid-cols-6 2xl:hidden">
             <ProcedureColumnHelp field="duration" />
             <ProcedureColumnHelp field="preparation" />
             <ProcedureColumnHelp field="interval" />
             <ProcedureColumnHelp field="weekly" />
+            <ProcedureColumnHelp field="room" />
             <ProcedureColumnHelp field="relaxing" />
           </div>
         )}
@@ -138,22 +144,26 @@ export const ProcedureCatalog = (props: ProcedureCatalogProps) => {
         {procedures.length ? procedures.map((procedure) => <article className={`grid gap-3 p-3 transition-colors focus-within:bg-blue-50/30 hover:bg-slate-50 sm:grid-cols-[minmax(0,1fr)_minmax(9rem,0.8fr)_minmax(9rem,0.8fr)] sm:items-center ${catalogColumns}`} key={procedure.id}>
           <Input aria-label="Название процедуры" className="h-10 min-w-0 rounded-lg px-3 text-sm" maxLength={480} onChange={(event) => onUpdateProcedureAction(procedure.id, {name: event.target.value})} value={procedure.name}/>
           <Label className="flex min-w-0 items-center gap-2 text-sm text-slate-500">
-            <span className="shrink-0 xl:hidden">Процедура, мин</span>
+            <span className="shrink-0 2xl:hidden">Процедура, мин</span>
             <Input aria-invalid={getDraftKey(procedure.id, "durationMinutes") in numberDrafts} aria-label={`Продолжительность процедуры ${procedure.name}, минут`} className="h-9 w-full min-w-0 flex-1 rounded-lg px-2 text-sm text-slate-900" max={420} min={1} onBlur={() => clearNumberDraft(procedure.id, "durationMinutes")} onChange={(event) => updateNumber(procedure.id, "durationMinutes", event.target.value)} step={1} title="От 1 до 420 минут, вместе с подготовкой не более 420" type="number" value={getNumberValue(procedure, "durationMinutes")}/>
           </Label>
           <Label className="flex min-w-0 items-center gap-2 text-sm text-slate-500">
-            <span className="shrink-0 xl:hidden">Подготовка, мин</span>
+            <span className="shrink-0 2xl:hidden">Подготовка, мин</span>
             <Input aria-invalid={getDraftKey(procedure.id, "preparationMinutes") in numberDrafts} aria-label={`Время подготовки к процедуре ${procedure.name}, минут`} className="h-9 w-full min-w-0 flex-1 rounded-lg px-2 text-sm text-slate-900" max={419} min={0} onBlur={() => clearNumberDraft(procedure.id, "preparationMinutes")} onChange={(event) => updateNumber(procedure.id, "preparationMinutes", event.target.value)} step={1} title={`Всего в расписании: ${procedure.durationMinutes + procedure.preparationMinutes} мин`} type="number" value={getNumberValue(procedure, "preparationMinutes")}/>
           </Label>
           <Label className="flex min-w-0 items-center gap-2 text-sm text-slate-500">
-            <span className="shrink-0 xl:hidden">Интервал, дн.</span>
+            <span className="shrink-0 2xl:hidden">Интервал, дн.</span>
             <Input aria-invalid={getDraftKey(procedure.id, "minIntervalDays") in numberDrafts} aria-label={`Минимальный интервал между процедурами ${procedure.name}, дней`} className="h-9 w-full min-w-0 flex-1 rounded-lg px-2 text-sm text-slate-900" max={365} min={1} onBlur={() => clearNumberDraft(procedure.id, "minIntervalDays")} onChange={(event) => updateNumber(procedure.id, "minIntervalDays", event.target.value)} step={1} title="От 1 до 365 дней" type="number" value={getNumberValue(procedure, "minIntervalDays")}/>
           </Label>
           <Label className="flex min-w-0 items-center gap-2 text-sm text-slate-500">
-            <span className="shrink-0 xl:hidden">В неделю</span>
+            <span className="shrink-0 2xl:hidden">В неделю</span>
             <Input aria-invalid={getDraftKey(procedure.id, "defaultWeeklyCount") in numberDrafts} aria-label={`Количество процедур ${procedure.name} в неделю по умолчанию`} className="h-9 w-full min-w-0 flex-1 rounded-lg px-2 text-sm text-slate-900" max={7} min={1} onBlur={() => clearNumberDraft(procedure.id, "defaultWeeklyCount")} onChange={(event) => updateNumber(procedure.id, "defaultWeeklyCount", event.target.value)} step={1} title="От 1 до 7 процедур в неделю" type="number" value={getNumberValue(procedure, "defaultWeeklyCount")}/>
           </Label>
-          <Label className="flex min-w-0 items-center gap-2 text-sm text-slate-600"><Switch aria-label={`Расслабляющая процедура: ${procedure.name}`} checked={procedure.isRelaxing} onCheckedChange={(checked) => onUpdateProcedureAction(procedure.id, {isRelaxing: checked})}/><span className="xl:hidden">Расслабляющая процедура</span></Label>
+          <Label className="flex min-w-0 items-center gap-2 text-sm text-slate-500">
+            <span className="shrink-0 2xl:hidden">Кабинет</span>
+            <Input aria-label={`Кабинет процедуры ${procedure.name}`} className="h-9 w-full min-w-0 flex-1 rounded-lg px-2 text-sm text-slate-900" maxLength={80} onChange={(event) => onUpdateProcedureAction(procedure.id, {room: event.target.value})} placeholder="Любой" title="Необязательное поле: пустой кабинет — общий график организации" value={procedure.room ?? ""}/>
+          </Label>
+          <Label className="flex min-w-0 items-center gap-2 text-sm text-slate-600"><Switch aria-label={`Расслабляющая процедура: ${procedure.name}`} checked={procedure.isRelaxing} onCheckedChange={(checked) => onUpdateProcedureAction(procedure.id, {isRelaxing: checked})}/><span className="2xl:hidden">Расслабляющая процедура</span></Label>
           <Button aria-label={`Удалить ${procedure.name}`} className="size-9 justify-self-end rounded-lg text-slate-400 hover:bg-red-50 hover:text-red-600 sm:justify-self-center" onClick={() => onRemoveProcedureAction(procedure.id)} size="icon" type="button" variant="ghost"><X className="size-4"/></Button>
         </article>) : <p className="p-6 text-center text-sm text-slate-500">Каталог пуст. Добавьте процедуру, чтобы продолжить.</p>}
           </div>

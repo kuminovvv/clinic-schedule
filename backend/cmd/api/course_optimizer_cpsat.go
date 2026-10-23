@@ -19,6 +19,7 @@ type optimizerBusySlot struct {
 	PatientNumber  *int   `json:"patientNumber"`
 	ProcedureID    string `json:"procedureId"`
 	SourcePlanDate string `json:"sourcePlanDate"`
+	Room           string `json:"room"`
 }
 
 type optimizerPayload struct {
@@ -49,7 +50,7 @@ func createCourseScheduleCP(ctx context.Context, day time.Time, plans []patientP
 	for _, slot := range occupied {
 		input.Occupied = append(input.Occupied, optimizerBusySlot{
 			StartAt: slot.start.Format("2006-01-02T15:04"), EndAt: slot.end.Format("2006-01-02T15:04"),
-			PatientNumber: slot.patient, ProcedureID: slot.procedureID, SourcePlanDate: slot.sourcePlanDate,
+			PatientNumber: slot.patient, ProcedureID: slot.procedureID, SourcePlanDate: slot.sourcePlanDate, Room: slot.room,
 		})
 	}
 	payload, err := json.Marshal(input)
@@ -123,7 +124,7 @@ func validateOptimizedSchedule(day time.Time, plans []patientPlan, procedures ma
 			return scheduleResponse{}, fmt.Errorf("optimizer returned a session outside working hours or stay")
 		}
 		for _, previous := range occupied {
-			if (previous.patient == nil || *previous.patient == item.PatientNumber) && start.Before(previous.end) && end.After(previous.start) {
+			if (previous.patient == nil || (*previous.patient == item.PatientNumber && (previous.sourcePlanDate == "" || previous.sourcePlanDate == day.Format("2006-01-02"))) || sameRoom(previous.room, p.Room)) && start.Before(previous.end) && end.After(previous.start) {
 				return scheduleResponse{}, fmt.Errorf("optimizer overlaps an existing appointment")
 			}
 			if previous.patient != nil && *previous.patient == item.PatientNumber && previous.procedureID == item.ProcedureID &&
@@ -133,7 +134,7 @@ func validateOptimizedSchedule(day time.Time, plans []patientPlan, procedures ma
 			}
 		}
 		for _, prior := range result.Appointments {
-			if prior.PatientNumber != nil && *prior.PatientNumber == item.PatientNumber && prior.StartAt < item.EndAt && item.StartAt < prior.EndAt {
+			if (prior.PatientNumber != nil && *prior.PatientNumber == item.PatientNumber || sameRoom(prior.Room, p.Room)) && prior.StartAt < item.EndAt && item.StartAt < prior.EndAt {
 				return scheduleResponse{}, fmt.Errorf("optimizer overlaps patient sessions")
 			}
 		}
@@ -159,7 +160,7 @@ func validateOptimizedSchedule(day time.Time, plans []patientPlan, procedures ma
 		result.Appointments = append(result.Appointments, appointment{
 			ID: id, Title: fmt.Sprintf("Пациент %d · %s", patient, p.Name),
 			StartAt: item.StartAt, EndAt: item.EndAt, Description: fmt.Sprintf("%d мин + %d мин подготовка", p.DurationMinutes, p.PreparationMinutes),
-			Color: color, Status: "scheduled", GeneratedByPlanner: true, PatientNumber: &patient, ProcedureID: p.ID,
+			Color: color, Status: "scheduled", GeneratedByPlanner: true, PatientNumber: &patient, ProcedureID: p.ID, Room: p.Room,
 		})
 	}
 	result.ScheduledCount = len(result.Appointments)

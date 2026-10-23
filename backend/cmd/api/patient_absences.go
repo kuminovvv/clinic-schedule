@@ -40,6 +40,7 @@ type storedTreatment struct {
 	generated   bool
 	patient     *int
 	planDate    string
+	room        string
 }
 
 func parseISODate(value string) (time.Time, bool) {
@@ -143,6 +144,10 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext('clinic-schedule-room-appointments'))"); err != nil {
+		writeError(w, 500, "could not lock room occupancy")
+		return
+	}
 	// Use the same plan lock as full regeneration and editing of patient plans.
 	if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock(hashtext($1))", input.Date); err != nil {
 		writeError(w, 500, "could not lock patient plan")
@@ -190,7 +195,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 
 	// Read all scheduled sessions of this admission before modifying anything.
 	// Locking them also makes optimistic manual moves conflict with this transaction.
-	rows, err := tx.Query(ctx, `SELECT id,start_at,end_at,COALESCE(source_procedure_id,''),manually_modified,generated_by_planner
+	rows, err := tx.Query(ctx, `SELECT id,start_at,end_at,COALESCE(source_procedure_id,''),manually_modified,generated_by_planner,room
 		FROM appointments WHERE source_plan_date=$1 AND patient_number=$2 AND status='scheduled'
 		ORDER BY start_at,id FOR UPDATE`, input.Date, input.PatientNumber)
 	if err != nil {
@@ -200,7 +205,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	treatments := []storedTreatment{}
 	for rows.Next() {
 		var item storedTreatment
-		if err := rows.Scan(&item.id, &item.start, &item.end, &item.procedureID, &item.manual, &item.generated); err != nil {
+		if err := rows.Scan(&item.id, &item.start, &item.end, &item.procedureID, &item.manual, &item.generated, &item.room); err != nil {
 			rows.Close()
 			writeError(w, 500, "could not load patient appointments")
 			return
@@ -231,7 +236,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	}
 	result.AffectedCount = len(move)
 
-	rows, err = tx.Query(ctx, "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count FROM procedures")
+	rows, err = tx.Query(ctx, "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,room FROM procedures")
 	if err != nil {
 		writeError(w, 500, "could not load procedures")
 		return
@@ -239,7 +244,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	procedureMap := map[string]procedure{}
 	for rows.Next() {
 		var p procedure
-		if err := rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.PreparationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.PreparationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount, &p.Room); err != nil {
 			rows.Close()
 			writeError(w, 500, "could not load procedures")
 			return
@@ -261,22 +266,28 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	// Extra appointments without a patient number block everybody; manually
 	// created appointments for this patient must also remain as they are.
 	occupied := []timeSlot{}
-	rows, err = tx.Query(ctx, `SELECT start_at,end_at,patient_number,COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),'')
+	rows, err = tx.Query(ctx, `SELECT start_at,end_at,patient_number,COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),''),room
 		FROM appointments WHERE status='scheduled' AND start_at >= $1 AND start_at < $2
-		AND (patient_number IS NULL OR (patient_number=$3 AND (source_plan_date=$4 OR source_plan_date IS NULL)))`, admitted, discharge, input.PatientNumber, input.Date)
+		AND (patient_number IS NULL OR (patient_number=$3 AND (source_plan_date=$4 OR source_plan_date IS NULL)) OR room<>'')`, admitted, discharge, input.PatientNumber, input.Date)
 	if err != nil {
 		writeError(w, 500, "could not load occupied slots")
 		return
 	}
 	for rows.Next() {
 		var slot timeSlot
-		if err := rows.Scan(&slot.start, &slot.end, &slot.patient, &slot.procedureID, &slot.sourcePlanDate); err != nil {
+		if err := rows.Scan(&slot.start, &slot.end, &slot.patient, &slot.procedureID, &slot.sourcePlanDate, &slot.room); err != nil {
 			rows.Close()
 			writeError(w, 500, "could not read occupied slots")
 			return
 		}
 		slot.start = time.Date(slot.start.Year(), slot.start.Month(), slot.start.Day(), slot.start.Hour(), slot.start.Minute(), 0, 0, time.Local)
 		slot.end = time.Date(slot.end.Year(), slot.end.Month(), slot.end.Day(), slot.end.Hour(), slot.end.Minute(), 0, 0, time.Local)
+		if slot.patient != nil && *slot.patient == input.PatientNumber && slot.sourcePlanDate != "" && slot.sourcePlanDate != input.Date {
+			// Another admission can use the same temporary patient number;
+			// keep only its room reservation, not a patient-level block.
+			other := 0
+			slot.patient = &other
+		}
 		occupied = append(occupied, slot)
 	}
 	if err := rows.Err(); err != nil {
@@ -310,6 +321,10 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Сеанс %s не связан с существующей процедурой.", previous.id))
 			continue
 		}
+		// A previously booked room is a snapshot, even if the catalog has
+		// since been changed. Keep that resource on rescheduled sessions.
+		p.Room = previous.room
+		procedureForMove := map[string]procedure{p.ID: p}
 		first := previous.start
 		if previous.start.Format("2006-01-02") < dayToday {
 			first = now
@@ -342,7 +357,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 					dayOccupied = append(dayOccupied, slot)
 				}
 			}
-			daily, err := createSchedule(day, []scheduleTask{{PatientNumber: input.PatientNumber, Severity: "high", ProcedureID: p.ID}}, procedureMap, workHours, dayOccupied)
+			daily, err := createSchedule(day, []scheduleTask{{PatientNumber: input.PatientNumber, Severity: "high", ProcedureID: p.ID}}, procedureForMove, workHours, dayOccupied)
 			if err != nil {
 				writeError(w, 500, "could not calculate rescheduling")
 				return
@@ -357,7 +372,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 			start, _ := time.ParseInLocation("2006-01-02T15:04", item.StartAt, time.Local)
 			end, _ := time.ParseInLocation("2006-01-02T15:04", item.EndAt, time.Local)
 			patient := input.PatientNumber
-			occupied = append(occupied, timeSlot{start: start, end: end, patient: &patient, procedureID: p.ID, sourcePlanDate: input.Date})
+			occupied = append(occupied, timeSlot{start: start, end: end, patient: &patient, procedureID: p.ID, sourcePlanDate: input.Date, room: p.Room})
 			result.Appointments = append(result.Appointments, item)
 			placed = true
 			break

@@ -69,6 +69,7 @@ export function AppointmentDialog({
   const [endDate, setEndDate] = useState(appointment?.endAt.slice(0, 10) ?? defaultEndAt.slice(0, 10))
   const [endTime, setEndTime] = useState(appointment?.endAt.slice(11, 16) ?? defaultEndAt.slice(11, 16))
   const [description, setDescription] = useState(appointment?.description ?? "")
+  const [room, setRoom] = useState(appointment?.room ?? "")
   const [color, setColor] = useState<AppointmentColor>(appointment?.color ?? "blue")
   const [error, setError] = useState("")
 
@@ -84,6 +85,7 @@ export function AppointmentDialog({
       setEndDate(appointment?.endAt.slice(0, 10) ?? defaultEndAt.slice(0, 10))
       setEndTime(appointment?.endAt.slice(11, 16) ?? defaultEndAt.slice(11, 16))
       setDescription(appointment?.description ?? "")
+      setRoom(appointment?.room ?? "")
       setColor(appointment?.color ?? "blue")
       setError("")
     }
@@ -115,7 +117,10 @@ export function AppointmentDialog({
     const end = new Date(`${endDate}T${endTime}`)
     const hasConflict = appointments.some((item) => {
       if (item.id === appointment?.id || item.status === "cancelled") return false
-      return start < new Date(item.endAt) && end > new Date(item.startAt)
+      const samePatientOrOrganization = !appointment?.patientNumber || !item.patientNumber ||
+        appointment.patientNumber === item.patientNumber && (!appointment.sourcePlanDate || !item.sourcePlanDate || appointment.sourcePlanDate === item.sourcePlanDate)
+      const sameAssignedRoom = room.trim() !== "" && item.room?.trim().toLocaleLowerCase() === room.trim().toLocaleLowerCase()
+      return (samePatientOrOrganization || sameAssignedRoom) && start < new Date(item.endAt) && end > new Date(item.startAt)
     })
     if (hasConflict) {
       setError("Это время пересекается с другой записью. Выберите свободный интервал.")
@@ -134,6 +139,7 @@ export function AppointmentDialog({
         endAt: `${endDate}T${endTime}`,
         description: description.trim(),
         color,
+        room: room.trim(),
         status: "scheduled",
       },
       appointment?.id,
@@ -230,6 +236,11 @@ export function AppointmentDialog({
               </Select>
             </Label>
           </div>
+
+          <Label className="block space-y-1.5 text-sm font-medium text-slate-700">
+            Кабинет (необязательно)
+            <Input aria-label="Кабинет записи" className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-normal" maxLength={80} onChange={(event) => setRoom(event.target.value)} placeholder="Не указан — общий график" value={room}/>
+          </Label>
 
           <Label className="block space-y-1.5 text-sm font-medium text-slate-700">
             Заметки

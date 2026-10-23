@@ -74,6 +74,7 @@ def solve(data: dict) -> dict:
     # NoOverlap prevents a patient's procedures from colliding.
     intervals: dict[tuple[int, int], list] = defaultdict(list)
     per_patient_day: dict[tuple[int, int], list] = defaultdict(list)
+    room_intervals: dict[tuple[str, int], list] = defaultdict(list)
     per_procedure: dict[tuple[int, str], list] = defaultdict(list)
     chosen: list[dict] = []
     active: list = []
@@ -109,7 +110,9 @@ def solve(data: dict) -> dict:
                     start_work, end_work = clock(working["start"]), clock(working["end"])
                     blocks = [(clock(b["start"]), clock(b["end"])) for b in working.get("breaks", [])]
                     for slot in occupied_by_day[day_str]:
-                        if slot.get("patientNumber") is None or slot.get("patientNumber") == patient:
+                        same_room = bool(proc.get("room", "").strip()) and (slot.get("room", "").strip().casefold() == proc.get("room", "").strip().casefold())
+                        same_admission = slot.get("patientNumber") == patient and slot.get("sourcePlanDate", "") in ("", data["startDate"])
+                        if slot.get("patientNumber") is None or same_admission or same_room:
                             t_start = datetime.fromisoformat(slot["startAt"])
                             t_end = datetime.fromisoformat(slot["endAt"])
                             blocks.append((t_start.hour * 60 + t_start.minute,
@@ -122,6 +125,8 @@ def solve(data: dict) -> dict:
                     begin = model.new_int_var_from_domain(cp_model.Domain.from_values(allowed), f"begin_{key}_d{d}")
                     opt = model.new_optional_fixed_size_interval_var(begin, duration, take, f"slot_{key}_d{d}")
                     intervals[patient, d].append(opt)
+                    if proc.get("room", "").strip():
+                        room_intervals[proc["room"].strip().casefold(), d].append(opt)
                     item = {"patient": patient, "proc": proc_id, "repeat": repeat,
                             "day": d, "take": take, "begin": begin, "duration": duration,
                             "relax": bool(proc.get("isRelaxing", False)), "severity": plan["severity"]}
@@ -197,6 +202,9 @@ def solve(data: dict) -> dict:
                     for other in normal:
                         model.add(relax["begin"] + relax["duration"] <= other["begin"]).only_enforce_if(
                             [relax["take"], other["take"]])
+
+    for room_slots in room_intervals.values():
+        model.add_no_overlap(room_slots)
 
     model.maximize(5_000_000 * sum(active)
                    - 400 * sum(dispersion)

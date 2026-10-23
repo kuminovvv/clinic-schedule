@@ -12,6 +12,7 @@ export type Appointment = {
   patientNumber?: number
   procedureId?: string
   sourcePlanDate?: string
+  room?: string
 }
 
 export type AppointmentInput = Omit<Appointment, "id">

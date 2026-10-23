@@ -11,6 +11,7 @@ export function createDefaultProcedures(): Procedure[] {
     isRelaxing: false,
     minIntervalDays: 1,
     defaultWeeklyCount: 1,
+    room: "",
   }))
 }
 
@@ -23,7 +24,8 @@ function isProcedure(value: unknown): value is Procedure {
     (procedure.preparationMinutes === undefined || Number.isInteger(procedure.preparationMinutes) && (procedure.preparationMinutes as number) >= 0 && procedure.durationMinutes + (procedure.preparationMinutes as number) <= 420) &&
     typeof procedure.isRelaxing === "boolean" &&
     (procedure.minIntervalDays === undefined || Number.isInteger(procedure.minIntervalDays) && (procedure.minIntervalDays as number) >= 1 && (procedure.minIntervalDays as number) <= 365) &&
-    (procedure.defaultWeeklyCount === undefined || Number.isInteger(procedure.defaultWeeklyCount) && (procedure.defaultWeeklyCount as number) >= 1 && (procedure.defaultWeeklyCount as number) <= 7)
+    (procedure.defaultWeeklyCount === undefined || Number.isInteger(procedure.defaultWeeklyCount) && (procedure.defaultWeeklyCount as number) >= 1 && (procedure.defaultWeeklyCount as number) <= 7) &&
+    (procedure.room === undefined || typeof procedure.room === "string" && procedure.room.trim().length <= 80)
 }
 
 export function loadProcedures() {
@@ -36,7 +38,7 @@ export function loadProcedures() {
     }
     return { procedures: (parsed as Procedure[]).map((procedure) => {
       const legacy = procedure.preparationMinutes === undefined
-      return {...procedure, durationMinutes: legacy && procedure.durationMinutes > 20 ? procedure.durationMinutes - 20 : procedure.durationMinutes, preparationMinutes: legacy && procedure.durationMinutes > 20 ? 20 : 0, minIntervalDays: procedure.minIntervalDays ?? 1, defaultWeeklyCount: procedure.defaultWeeklyCount ?? 1}
+      return {...procedure, durationMinutes: legacy && procedure.durationMinutes > 20 ? procedure.durationMinutes - 20 : procedure.durationMinutes, preparationMinutes: legacy && procedure.durationMinutes > 20 ? 20 : 0, minIntervalDays: procedure.minIntervalDays ?? 1, defaultWeeklyCount: procedure.defaultWeeklyCount ?? 1, room: procedure.room ?? ""}
     }), hasError: false }
   } catch {
     return { procedures: createDefaultProcedures(), hasError: true }

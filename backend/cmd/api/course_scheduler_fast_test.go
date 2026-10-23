@@ -168,6 +168,55 @@ func TestFastCourseHighSeverityRelaxingFirst(t *testing.T) {
 	}
 }
 
+func TestFastCourseOptionalRoomsAreSharedResources(t *testing.T) {
+	start := time.Date(2026, 10, 22, 0, 0, 0, 0, time.Local)
+	for _, tc := range []struct {
+		name     string
+		rooms    [2]string
+		sameTime bool
+	}{
+		{"both organization wide", [2]string{"", ""}, true},
+		{"different rooms", [2]string{"101", "102"}, true},
+		{"same room", [2]string{"101", " 101 "}, false},
+		{"one room one organization wide", [2]string{"101", ""}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			plans, procedures := makeFastPlans(2, 1, 1)
+			plans[0].ProcedureIDs, plans[1].ProcedureIDs = []string{"p0"}, []string{"p1"}
+			plans[0].ProcedureCounts, plans[1].ProcedureCounts = map[string]int{"p0": 1}, map[string]int{"p1": 1}
+			for i, id := range []string{"p0", "p1"} {
+				p := procedures[id]
+				p.Room = tc.rooms[i]
+				procedures[id] = p
+			}
+			result, err := createCourseScheduleFast(start, plans, procedures, settings{TimeStepMinutes: 10, WorkWeek: defaultWorkWeek()}, nil, nil)
+			if err != nil || result.ScheduledCount != 2 {
+				t.Fatalf("failed to schedule rooms: %+v err=%v", result, err)
+			}
+			if same := result.Appointments[0].StartAt == result.Appointments[1].StartAt; same != tc.sameTime {
+				t.Fatalf("unexpected room overlap=%t expected %t: %+v", same, tc.sameTime, result.Appointments)
+			}
+		})
+	}
+}
+
+func TestFastCourseExistingRoomReservationBlocksAnotherPatient(t *testing.T) {
+	start := time.Date(2026, 10, 22, 0, 0, 0, 0, time.Local)
+	plans, procedures := makeFastPlans(1, 1, 1)
+	plans[0].ProcedureIDs = []string{"p0"}
+	plans[0].ProcedureCounts = map[string]int{"p0": 1}
+	p := procedures["p0"]
+	p.Room = "Кабинет 5"
+	procedures["p0"] = p
+	other := 99
+	occupied := []timeSlot{{start: time.Date(2026, 10, 22, 9, 0, 0, 0, time.Local),
+		end: time.Date(2026, 10, 22, 10, 0, 0, 0, time.Local), patient: &other, room: "кабинет 5"}}
+	result, err := createCourseScheduleFast(start, plans, procedures, settings{TimeStepMinutes: 10, WorkWeek: defaultWorkWeek()}, occupied, nil)
+	if err != nil || result.ScheduledCount != 1 || result.Appointments[0].StartAt < "2026-10-22T10:00" {
+		t.Fatalf("existing patient in same room not respected: %+v err=%v", result, err)
+	}
+}
+
 func assertFastScheduleValid(t *testing.T, output scheduleResponse, start time.Time, plans []patientPlan, procedures map[string]procedure) {
 	t.Helper()
 	byPatient := map[int][]appointment{}

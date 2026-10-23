@@ -109,7 +109,11 @@ func createCourseScheduleWithAbsences(start time.Time, plans []patientPlan, proc
 			}
 			dailyOccupied := make([]timeSlot, 0)
 			for _, slot := range occupied {
-				if slot.start.Year() == day.Year() && slot.start.YearDay() == day.YearDay() && (slot.sourcePlanDate == "" || slot.sourcePlanDate == planDateKey) {
+				if slot.start.Year() == day.Year() && slot.start.YearDay() == day.YearDay() && (slot.sourcePlanDate == "" || slot.sourcePlanDate == planDateKey || slot.room != "") {
+					if slot.sourcePlanDate != "" && slot.sourcePlanDate != planDateKey && slot.patient != nil {
+						outsidePatient := 0
+						slot.patient = &outsidePatient
+					}
 					dailyOccupied = append(dailyOccupied, slot)
 				}
 			}
@@ -124,7 +128,7 @@ func createCourseScheduleWithAbsences(start time.Time, plans []patientPlan, proc
 				startTime, _ := time.ParseInLocation("2006-01-02T15:04", item.StartAt, time.Local)
 				endTime, _ := time.ParseInLocation("2006-01-02T15:04", item.EndAt, time.Local)
 				patient := plan.PatientNumber
-				occupied = append(occupied, timeSlot{start: startTime, end: endTime, patient: &patient, procedureID: item.ProcedureID, sourcePlanDate: planDateKey})
+				occupied = append(occupied, timeSlot{start: startTime, end: endTime, patient: &patient, procedureID: item.ProcedureID, sourcePlanDate: planDateKey, room: item.Room})
 				result.Appointments = append(result.Appointments, item)
 			}
 		}
