@@ -258,7 +258,13 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                             setSelectedDay(today)
                         }}
                     />
-                    <div className="min-h-0 flex-1 overflow-hidden">
+                    <div
+                        className="min-h-0 flex-1 overflow-hidden"
+                        id="calendar-appointments-panel"
+                        role={patientNumbers.length > 0 ? "tabpanel" : undefined}
+                        aria-labelledby={patientNumbers.length > 0 ? `calendar-patient-tab-${selectedPatientNumber ?? "all"}` : undefined}
+                        tabIndex={patientNumbers.length > 0 ? 0 : undefined}
+                    >
                         <div className="h-full w-full">
                             {storageError && (
                                 <p className="flex flex-wrap items-center justify-between gap-2 border-b border-amber-200 bg-amber-50 px-5 py-2 text-sm text-amber-900"
