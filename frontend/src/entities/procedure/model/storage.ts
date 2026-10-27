@@ -11,6 +11,8 @@ export function createDefaultProcedures(): Procedure[] {
     isRelaxing: false,
     minIntervalDays: 1,
     defaultWeeklyCount: 1,
+    defaultSessionCount: 1,
+    defaultPrerequisiteId: "",
     room: "",
   }))
 }
@@ -25,6 +27,8 @@ function isProcedure(value: unknown): value is Procedure {
     typeof procedure.isRelaxing === "boolean" &&
     (procedure.minIntervalDays === undefined || Number.isInteger(procedure.minIntervalDays) && (procedure.minIntervalDays as number) >= 1 && (procedure.minIntervalDays as number) <= 365) &&
     (procedure.defaultWeeklyCount === undefined || Number.isInteger(procedure.defaultWeeklyCount) && (procedure.defaultWeeklyCount as number) >= 1 && (procedure.defaultWeeklyCount as number) <= 7) &&
+    (procedure.defaultSessionCount === undefined || Number.isInteger(procedure.defaultSessionCount) && (procedure.defaultSessionCount as number) >= 1 && (procedure.defaultSessionCount as number) <= 365) &&
+    (procedure.defaultPrerequisiteId === undefined || typeof procedure.defaultPrerequisiteId === "string") &&
     (procedure.room === undefined || typeof procedure.room === "string" && procedure.room.trim().length <= 80)
 }
 
@@ -38,7 +42,7 @@ export function loadProcedures() {
     }
     return { procedures: (parsed as Procedure[]).map((procedure) => {
       const legacy = procedure.preparationMinutes === undefined
-      return {...procedure, durationMinutes: legacy && procedure.durationMinutes > 20 ? procedure.durationMinutes - 20 : procedure.durationMinutes, preparationMinutes: legacy && procedure.durationMinutes > 20 ? 20 : 0, minIntervalDays: procedure.minIntervalDays ?? 1, defaultWeeklyCount: procedure.defaultWeeklyCount ?? 1, room: procedure.room ?? ""}
+      return {...procedure, durationMinutes: legacy && procedure.durationMinutes > 20 ? procedure.durationMinutes - 20 : procedure.durationMinutes, preparationMinutes: legacy && procedure.durationMinutes > 20 ? 20 : 0, minIntervalDays: procedure.minIntervalDays ?? 1, defaultWeeklyCount: procedure.defaultWeeklyCount ?? 1, defaultSessionCount: procedure.defaultSessionCount ?? 1, defaultPrerequisiteId: procedure.defaultPrerequisiteId ?? "", room: procedure.room ?? ""}
     }), hasError: false }
   } catch {
     return { procedures: createDefaultProcedures(), hasError: true }

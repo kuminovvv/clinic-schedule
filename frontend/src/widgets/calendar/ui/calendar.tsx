@@ -19,6 +19,7 @@ import {CalendarToolbar} from "./calendar-toolbar"
 import {ClearScheduleDialog} from "./clear-schedule-dialog"
 import {usePageDrivenScroll} from "@/shared/lib/hooks/use-page-driven-scroll"
 import {WeekGrid} from "./week-grid"
+import {useRelaxingProcedures} from "./use-relaxing-procedures"
 
 type DialogState = {
     initialStartAt: string
@@ -70,6 +71,7 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
     const [appointments, setAppointments] = useState<Appointment[]>(initialAppointments)
     const [calendarSettings, setCalendarSettings] = useState(initialSettings)
     const [selectedPatientNumber, setSelectedPatientNumber] = useState<number | null>(null)
+    const relaxingProcedureIds = useRelaxingProcedures()
     const {timeStepMinutes, displayStartHour, displayEndHour} = calendarSettings
     const [dialog, setDialog] = useState<DialogState | null>(null)
     const [clearDialogOpen, setClearDialogOpen] = useState(false)
@@ -275,12 +277,18 @@ export function Calendar({initialDateKey, initialAppointments, initialSettings}:
                                 <div className="min-h-0 flex-1">
                                     <WeekGrid
                                         appointments={visibleAppointments}
+                                        relaxingProcedureIds={relaxingProcedureIds}
                                         currentTime={currentTime}
                                         date={selectedDate}
                                         selectedDay={selectedDay}
                                         onSelectAppointment={(appointment) =>
                                             setDialog({initialStartAt: appointment.startAt, appointment})
                                         }
+                                        onAssignProcedure={(appointment, day) => {
+                                            const date = appointment.sourcePlanDate || day
+                                            const patient = appointment.patientNumber
+                                            router.push(`/schedule/patients?date=${encodeURIComponent(date)}${patient ? `&patient=${patient}` : ""}`)
+                                        }}
                                         onMoveAppointment={handleMoveAppointment}
                                         onInvalidSelection={(message) => notify.warning("Не удалось выбрать время", message)}
                                         timeStepMinutes={timeStepMinutes}

@@ -1,5 +1,6 @@
 import {explainApiError} from "@/shared/api/error-messages"
 import {notify} from "@/shared/lib/notifications"
+import type {UnscheduledDetail} from "@/shared/api/schedule-feedback"
 
 type RequestMethod = "GET" | "POST" | "PUT" | "DELETE"
 
@@ -8,18 +9,25 @@ export class BackendRequestError extends Error {
     readonly status: number,
     readonly reason: string,
     readonly path: string,
+    readonly unscheduledDetails: UnscheduledDetail[] = [],
+    readonly unscheduledCount = 0,
   ) {
     super(`Backend request failed: ${status} at ${path}: ${reason}`)
     this.name = "BackendRequestError"
   }
 }
 
-const getErrorReason = async (response: Response): Promise<string> => {
+const getErrorDetails = async (response: Response) => {
   try {
-    const content = await response.json() as {error?: unknown}
-    return typeof content.error === "string" ? content.error : ""
+    const content = await response.json() as {error?: unknown; unscheduledDetails?: unknown; unscheduledCount?: unknown}
+    const details: UnscheduledDetail[] = Array.isArray(content.unscheduledDetails) ? content.unscheduledDetails.filter((item): item is UnscheduledDetail =>
+      item !== null && typeof item === "object" && Number.isInteger(item.patientNumber) &&
+      typeof item.procedureName === "string" && Number.isInteger(item.requestedCount) && Number.isInteger(item.missingCount),
+    ) : []
+    return {reason: typeof content.error === "string" ? content.error : "", details,
+      count: typeof content.unscheduledCount === "number" ? content.unscheduledCount : 0}
   } catch {
-    return ""
+    return {reason: "", details: [], count: 0}
   }
 }
 
@@ -35,7 +43,10 @@ export const requestBackend = async <T>(
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: "no-store",
     })
-    if (!response.ok) throw new BackendRequestError(response.status, await getErrorReason(response), path)
+    if (!response.ok) {
+      const {reason, details, count} = await getErrorDetails(response)
+      throw new BackendRequestError(response.status, reason, path, details, count)
+    }
     if (response.status === 204) return null
     try {
       return await response.json() as T
@@ -44,7 +55,7 @@ export const requestBackend = async <T>(
     }
   } catch (error) {
     const issue = error instanceof BackendRequestError
-      ? {status: error.status, reason: error.reason, path, method}
+      ? {status: error.status, reason: error.reason, path, method, unscheduledDetails: error.unscheduledDetails, unscheduledCount: error.unscheduledCount}
       : {path, method}
     const notice = explainApiError(issue)
     if (notice.type === "warning") notify.warning(notice.title, notice.description)

@@ -8,16 +8,19 @@ import {
     HOUR_HEIGHT,
 } from "@/shared/lib/calendar-date"
 import {Button} from "@/shared/ui/shadcn/button"
-import {Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle} from "@/shared/ui/shadcn/dialog"
+import {AppointmentClusterPanel, type AppointmentCluster} from "./appointment-cluster-panel"
+import {getPatientColorStyle} from "./patient-colors"
 
 type WeekGridProps = {
     date: Date
     selectedDay: Date
     appointments: Appointment[]
+    relaxingProcedureIds: Set<string>
     currentTime: Date | null
     onSelectTime: (date: Date, endAt: Date | undefined, anchor: DOMRect) => void
     onSelectDay: (date: Date) => void
     onSelectAppointment: (appointment: Appointment) => void
+    onAssignProcedure: (appointment: Appointment, day: string) => void
     onMoveAppointment: (id: string, start: Date, end: Date) => void
     onInvalidSelection: (message: string) => void
     timeStepMinutes: TimeStepMinutes
@@ -42,6 +45,23 @@ type AppointmentMove = {appointmentId: string; pointerId: number; initialX: numb
 
 function timeLabel(date: Date) {
     return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`
+}
+
+function AppointmentTitle({appointment}: {appointment: Appointment}) {
+    const separatorIndex = appointment.title.indexOf(" · ")
+    const hasProcedureLabel = appointment.patientNumber != null && appointment.procedureId && separatorIndex >= 0
+    const cancelledPrefix = appointment.status === "cancelled" ? "Отменено · " : ""
+
+    if (!hasProcedureLabel) {
+        return <span className="calendar-appointment-title font-semibold">{cancelledPrefix}{appointment.title}</span>
+    }
+
+    return (
+        <span className="calendar-appointment-title font-semibold">
+            <span className="calendar-appointment-patient">{cancelledPrefix}{appointment.title.slice(0, separatorIndex)}</span>
+            <span className="calendar-appointment-procedure">{appointment.title.slice(separatorIndex + 3)}</span>
+        </span>
+    )
 }
 
 function layoutOverlappingAppointments(appointments: Appointment[]) {
@@ -97,10 +117,12 @@ export function WeekGrid({
                              date,
                              selectedDay,
                              appointments,
+                             relaxingProcedureIds,
                              currentTime,
                              onSelectTime,
                              onSelectDay,
                              onSelectAppointment,
+                             onAssignProcedure,
                              onMoveAppointment,
                              onInvalidSelection,
                              timeStepMinutes,
@@ -114,7 +136,7 @@ export function WeekGrid({
     const [selection, setSelection] = useState<{dayKey: string; startMinutes: number; endMinutes: number} | null>(null)
     const [draggedAppointmentId, setDraggedAppointmentId] = useState<string | null>(null)
     const [dragPreview, setDragPreview] = useState<DragPreview | null>(null)
-    const [selectedCluster, setSelectedCluster] = useState<{day: string; appointments: Appointment[]} | null>(null)
+    const [selectedCluster, setSelectedCluster] = useState<AppointmentCluster | null>(null)
     const activeMove = useRef<AppointmentMove | null>(null)
     const dragPreviewRef = useRef<DragPreview | null>(null)
     const suppressAppointmentClick = useRef<string | null>(null)
@@ -189,10 +211,12 @@ export function WeekGrid({
     const nowTop = ((nowMinutes - displayStartHour * 60) / 60) * hourHeight
 
     const beginAppointmentGesture = (
-        event: ReactPointerEvent<HTMLElement>,
+        event: ReactPointerEvent<Element>,
         appointment: Appointment,
         mode: AppointmentMove["mode"],
         hiddenDuration = 0,
+        explicitGrabOffset?: number,
+        captureTarget: Element = event.currentTarget,
     ) => {
         if (appointment.status === "cancelled" || event.button !== 0) return
         event.preventDefault()
@@ -200,9 +224,9 @@ export function WeekGrid({
         const bounds = event.currentTarget.getBoundingClientRect()
         const appointmentBounds = event.currentTarget.closest("[data-appointment-card]")?.getBoundingClientRect() ?? bounds
         const pointerOffset = (event.clientY - appointmentBounds.top) / hourHeight * 60
-        const grabOffsetMinutes = mode === "resize-end"
+        const grabOffsetMinutes = explicitGrabOffset ?? (mode === "resize-end"
             ? (event.clientY - appointmentBounds.bottom) / hourHeight * 60
-            : pointerOffset + hiddenDuration
+            : pointerOffset + hiddenDuration)
         activeMove.current = {
             appointmentId: appointment.id,
             pointerId: event.pointerId,
@@ -212,7 +236,7 @@ export function WeekGrid({
             mode,
             hasMoved: false,
         }
-        event.currentTarget.setPointerCapture(event.pointerId)
+        captureTarget.setPointerCapture(event.pointerId)
     }
 
     const handleMovePointer = (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -331,6 +355,9 @@ export function WeekGrid({
             window.setTimeout(() => { suppressAppointmentClick.current = null }, 0)
             if (preview?.appointmentId === move.appointmentId) {
                 onMoveAppointment(move.appointmentId, preview.start, preview.end)
+                setSelectedCluster(null)
+            } else {
+                onInvalidSelection("Не получилось перенести сеанс. Отпустите его внутри рабочего времени выбранного дня.")
             }
         }
         activeMove.current = null
@@ -583,10 +610,12 @@ export function WeekGrid({
                                     const isMoving = draggedAppointmentId === appointment.id && dragPreview?.appointmentId === appointment.id
                                     const displayedStart = isMoving ? dragPreview.start : visibleStart
                                     const displayedEnd = isMoving ? dragPreview.end : visibleEnd
+                                    const hasPatientColor = appointment.patientNumber !== undefined
+                                    const isRelaxing = (appointment.procedureId && relaxingProcedureIds.has(appointment.procedureId)) || (appointment.generatedByPlanner && appointment.color === "teal")
                                     return (
                                         <Button
                                             aria-hidden={isMoving || undefined}
-                                            className={`calendar-appointment-card absolute z-10 group flex-col items-start justify-start touch-none overflow-hidden rounded-lg px-2 py-1 text-left text-xs transition ${eventColors[appointment.color]} ${appointment.status === "cancelled" ? "opacity-60 grayscale" : "cursor-grab active:cursor-grabbing"} ${isMoving ? "invisible" : ""}`}
+                                            className={`calendar-appointment-card absolute z-10 group flex-col items-start justify-start touch-none overflow-hidden rounded-lg border-0 px-2 py-1 text-left text-xs transition ${isRelaxing ? "bg-teal-100 text-teal-950 ring-2 ring-inset ring-teal-500 hover:bg-teal-200" : hasPatientColor ? "text-slate-950 hover:brightness-95" : eventColors[appointment.color]} ${appointment.status === "cancelled" ? "opacity-60 grayscale" : "cursor-grab active:cursor-grabbing"} ${isMoving ? "invisible" : ""}`}
                                             key={appointment.id}
                                             data-appointment-card
                                             onPointerDown={(event) => beginAppointmentGesture(event, appointment, "move", start < dayStart ? (dayStart.getTime() - start.getTime()) / 60_000 : 0)}
@@ -600,12 +629,12 @@ export function WeekGrid({
                                                 event.stopPropagation()
                                                 onSelectAppointment(appointment)
                                             }}
-                                            style={{top, height, left: `calc(${layout.column * width}% + 4px)`, width: `calc(${width}% - 8px)`}}
+                                            style={{top, height, left: `calc(${layout.column * width}% + 4px)`, width: `calc(${width}% - 8px)`, ...(hasPatientColor && !isRelaxing ? getPatientColorStyle(appointment.patientNumber!) : {})}}
                                             type="button"
                                             variant="ghost"
                                         >
                                             <span className="calendar-appointment-content">
-                                                <span className="calendar-appointment-title font-semibold">{appointment.status === "cancelled" ? "Отменено · " : ""}{appointment.title}</span>
+                                                <AppointmentTitle appointment={appointment}/>
                                                 <span className="calendar-appointment-time tabular-nums">
                                                     {timeLabel(displayedStart)} – {timeLabel(displayedEnd)}
                                                 </span>
@@ -641,14 +670,20 @@ export function WeekGrid({
                                         <Button
                                             key={group.id}
                                             data-appointment-cluster
-                                            aria-label={`${group.appointments.length} сеансов, ${dayKey}, с ${timeLabel(visibleStart)} по ${timeLabel(visibleEnd)}. Показать список`}
-                                            className="absolute z-10 flex-col items-start justify-start overflow-hidden rounded-lg border border-blue-200 bg-blue-50 px-2 py-1 text-left text-xs text-blue-950 shadow-sm transition-colors hover:bg-blue-100 focus-visible:ring-2 focus-visible:ring-blue-500"
+                                            aria-label={`${group.appointments.length} сеансов, ${dayKey}, с ${timeLabel(visibleStart)} по ${timeLabel(visibleEnd)}. ${group.appointments.map((appointment) => appointment.title).join("; ")}. Показать список`}
+                                            className="absolute z-10 flex-col items-start justify-start overflow-visible rounded-lg border-0 bg-blue-50 px-2 py-1 text-left text-xs text-blue-950 shadow-sm transition-colors hover:bg-blue-100 focus-visible:ring-2 focus-visible:ring-blue-500"
                                             style={{top: (startMinute - displayStartHour * 60) * hourHeight / 60, height, left: 4, right: 4, width: "calc(100% - 8px)"}}
                                             type="button"
                                             variant="ghost"
                                             onClick={(event) => {
                                                 event.stopPropagation()
-                                                setSelectedCluster({day: dayKey, appointments: group.appointments})
+                                                const bounds = event.currentTarget.getBoundingClientRect()
+                                                const width = Math.min(336, window.innerWidth - 32)
+                                                const left = bounds.right + width + 12 <= window.innerWidth
+                                                    ? bounds.right + 8
+                                                    : Math.max(16, bounds.left - width - 8)
+                                                const top = Math.max(16, Math.min(bounds.top, window.innerHeight - Math.min(440, window.innerHeight - 32)))
+                                                setSelectedCluster({day: dayKey, appointments: group.appointments, left, top})
                                             }}
                                         >
                                             <span className="block w-full truncate font-semibold">{group.appointments.length} сеансов</span>
@@ -672,51 +707,42 @@ export function WeekGrid({
                 </div>
             </div>
         </div>
-        <Dialog open={selectedCluster !== null} onOpenChange={(open) => {if (!open) setSelectedCluster(null)}}>
-            <DialogContent className="sm:max-w-lg">
-                <DialogHeader>
-                    <DialogTitle>
-                        Процедуры на {selectedCluster?.day && new Date(`${selectedCluster.day}T12:00:00`).toLocaleDateString("ru-RU", {day: "numeric", month: "long", year: "numeric"})}
-                    </DialogTitle>
-                    <DialogDescription>
-                        {selectedCluster?.appointments.length ?? 0} сеансов в одно время. Выберите запись, чтобы посмотреть или изменить её.
-                    </DialogDescription>
-                </DialogHeader>
-                <div className="max-h-[60dvh] space-y-2 overflow-y-auto pr-1">
-                    {selectedCluster?.appointments.map((appointment) => (
-                        <Button
-                            key={appointment.id}
-                            type="button"
-                            variant="outline"
-                            className="h-auto min-h-14 w-full flex-col items-start gap-1 rounded-lg px-3 py-2 text-left whitespace-normal"
-                            onClick={() => {
-                                setSelectedCluster(null)
-                                onSelectAppointment(appointment)
-                            }}
-                        >
-                            <span className="font-semibold">{appointment.title}</span>
-                            <span className="text-xs text-slate-600 tabular-nums">
-                                {timeLabel(new Date(appointment.startAt))}–{timeLabel(new Date(appointment.endAt))}
-                                {appointment.room ? ` · Каб. ${appointment.room}` : ""}
-                            </span>
-                        </Button>
-                    ))}
-                </div>
-            </DialogContent>
-        </Dialog>
+        <AppointmentClusterPanel
+            cluster={selectedCluster}
+            onClose={() => setSelectedCluster(null)}
+            onEdit={(appointment) => {
+                setSelectedCluster(null)
+                onSelectAppointment(appointment)
+            }}
+            onStartDrag={(event, appointment) => {
+                beginAppointmentGesture(event, appointment, "move", 0, 0, gridRootRef.current ?? event.currentTarget)
+            }}
+            onAssignProcedure={(appointment, day) => {
+                setSelectedCluster(null)
+                onAssignProcedure(appointment, day)
+            }}
+            onCreate={() => {
+                if (!selectedCluster) return
+                const anchor = new DOMRect(selectedCluster.left, selectedCluster.top, 16, 16)
+                const afterGroup = new Date(Math.max(...selectedCluster.appointments.map((item) => new Date(item.endAt).getTime())))
+                setSelectedCluster(null)
+                onSelectTime(afterGroup, undefined, anchor)
+            }}
+        />
         {dragPreview && previewAppointment && typeof document !== "undefined" && createPortal(
             <div
                 aria-hidden="true"
-                className={`calendar-appointment-card pointer-events-none fixed z-50 flex flex-col items-start justify-start overflow-hidden rounded-lg px-2 py-1 text-left text-xs ${eventColors[previewAppointment.color]} ${previewAppointment.status === "cancelled" ? "opacity-60 grayscale" : ""}`}
+                className={`calendar-appointment-card pointer-events-none fixed z-50 flex flex-col items-start justify-start overflow-hidden rounded-lg border-0 px-2 py-1 text-left text-xs ${(previewAppointment.procedureId && relaxingProcedureIds.has(previewAppointment.procedureId)) || (previewAppointment.generatedByPlanner && previewAppointment.color === "teal") ? "bg-teal-100 text-teal-950 ring-2 ring-inset ring-teal-500" : previewAppointment.patientNumber !== undefined ? "text-slate-950" : eventColors[previewAppointment.color]} ${previewAppointment.status === "cancelled" ? "opacity-60 grayscale" : ""}`}
                 style={{
                     top: dragPreview.top,
                     left: dragPreview.left,
                     height: dragPreview.height,
                     width: dragPreview.width,
+                    ...(previewAppointment.patientNumber !== undefined && !(previewAppointment.procedureId && relaxingProcedureIds.has(previewAppointment.procedureId)) && !(previewAppointment.generatedByPlanner && previewAppointment.color === "teal") ? getPatientColorStyle(previewAppointment.patientNumber) : {}),
                 }}
             >
                 <span className="calendar-appointment-content">
-                    <span className="calendar-appointment-title font-semibold">{previewAppointment.status === "cancelled" ? "Отменено · " : ""}{previewAppointment.title}</span>
+                    <AppointmentTitle appointment={previewAppointment}/>
                     <span className="calendar-appointment-time tabular-nums">
                         {timeLabel(dragPreview.start)} – {timeLabel(dragPreview.end)}
                     </span>

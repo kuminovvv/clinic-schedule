@@ -5,9 +5,9 @@ import {getClientData, sendBackendRequest} from "@/shared/api/backend-client"
 import {notify} from "@/shared/lib/notifications"
 import {Button} from "@/shared/ui/shadcn/button"
 import {Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle} from "@/shared/ui/shadcn/dialog"
-import {Input} from "@/shared/ui/shadcn/input"
 import {Label} from "@/shared/ui/shadcn/label"
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@/shared/ui/shadcn/select"
+import {DatePicker} from "@/shared/ui/shadcn/date-picker"
 
 type AbsenceReason = "illness" | "other"
 type Absence = {date: string; patientNumber: number; from: string; to: string; reason: string}
@@ -21,27 +21,21 @@ type AbsenceResult = {
 }
 
 const asUtc = (day: string) => new Date(`${day}T00:00:00Z`)
-const lastStayDay = (day: string, days: number) => {
-  const end = asUtc(day)
-  end.setUTCDate(end.getUTCDate() + days - 1)
-  return end.toISOString().slice(0, 10)
-}
 const displayDay = (day: string) => asUtc(day).toLocaleDateString("ru-RU", {day: "numeric", month: "short", timeZone: "UTC"})
 
-export function PatientAbsenceControl({dateKey, patientNumber, stayDays}: {dateKey: string; patientNumber: number; stayDays: number}) {
+export function PatientAbsenceControl({courseKey, patientNumber, arrivalDate, departureDate}: {courseKey: string; patientNumber: number; arrivalDate: string; departureDate: string}) {
   const [open, setOpen] = useState(false)
-  const [from, setFrom] = useState(dateKey)
-  const [to, setTo] = useState(dateKey)
+  const [from, setFrom] = useState(arrivalDate)
+  const [to, setTo] = useState(arrivalDate)
   const [reason, setReason] = useState<AbsenceReason>("illness")
   const [preview, setPreview] = useState<AbsenceResult | null>(null)
   const [busy, setBusy] = useState(false)
   const [absences, setAbsences] = useState<Absence[]>([])
-  const lastDay = lastStayDay(dateKey, stayDays)
-  const valid = from >= dateKey && from <= to && to <= lastDay
+  const valid = from >= arrivalDate && from <= to && to <= departureDate
 
   const loadAbsences = async () => {
     try {
-      const result = await getClientData<Absence[] | {absences: Absence[]}>(`/v1/patient-absences?date=${dateKey}&patientNumber=${patientNumber}`)
+      const result = await getClientData<Absence[] | {absences: Absence[]}>(`/v1/patient-absences?date=${courseKey}&patientNumber=${patientNumber}`)
       setAbsences(Array.isArray(result) ? result : result.absences ?? [])
     } catch {
       // Error interceptor supplies a notice. The absence action remains available.
@@ -52,7 +46,7 @@ export function PatientAbsenceControl({dateKey, patientNumber, stayDays}: {dateK
     let active = true
     const load = async () => {
       try {
-        const result = await getClientData<Absence[] | {absences: Absence[]}>(`/v1/patient-absences?date=${dateKey}&patientNumber=${patientNumber}`)
+        const result = await getClientData<Absence[] | {absences: Absence[]}>(`/v1/patient-absences?date=${courseKey}&patientNumber=${patientNumber}`)
         if (active) setAbsences(Array.isArray(result) ? result : result.absences ?? [])
       } catch {
         // The interceptor explains API errors; no automatic retries.
@@ -60,30 +54,30 @@ export function PatientAbsenceControl({dateKey, patientNumber, stayDays}: {dateK
     }
     void load()
     return () => {active = false}
-  }, [dateKey, patientNumber])
+  }, [courseKey, patientNumber])
 
   const reset = () => {
     setPreview(null)
-    setFrom(dateKey)
-    setTo(dateKey)
+    setFrom(arrivalDate)
+    setTo(arrivalDate)
     setReason("illness")
   }
 
   const submit = async () => {
     if (busy) return
     if (!valid) {
-      notify.warning("Даты вне срока пребывания", `Выберите даты с ${displayDay(dateKey)} по ${displayDay(lastDay)}.`)
+      notify.warning("Даты вне периода лечения", `Выберите даты с ${displayDay(arrivalDate)} по ${displayDay(departureDate)}.`)
       return
     }
     setBusy(true)
     try {
       const result = await sendBackendRequest<AbsenceResult>("/v1/patient-absences", "POST", {
-        date: dateKey, patientNumber, from, to, reason, preview: preview === null,
+        date: courseKey, patientNumber, from, to, reason, preview: preview === null,
       })
       if (!result) throw new Error("Не удалось получить результат перепланирования")
       if (preview === null) {
         setPreview(result)
-        if (result.unscheduledCount > 0) notify.warning("Не все сеансы можно перенести", `Не помещаются в срок: ${result.unscheduledCount}. Измените даты или срок лечения.`)
+        if (result.unscheduledCount > 0) notify.warning("Не все сеансы можно перенести", `Не помещаются в период лечения: ${result.unscheduledCount}. Измените даты лечения или отсутствия.`)
         if (result.warnings?.length) notify.warning("Проверьте перенос", result.warnings.join("\n"))
       } else {
         notify.success("Отсутствие учтено", `Перенесено сеансов: ${result.rescheduledCount}. Остальные пациенты и ручные изменения сохранены.`)
@@ -123,10 +117,10 @@ export function PatientAbsenceControl({dateKey, patientNumber, stayDays}: {dateK
             </Label>
             <div className="grid grid-cols-2 gap-3">
               <Label className="grid gap-1.5 text-sm">Отсутствует с
-                <Input type="date" className="h-10" min={dateKey} max={lastDay} value={from} disabled={busy || preview !== null} onChange={(event) => {const next=event.target.value;setFrom(next);if(to<next)setTo(next)}}/>
+                <DatePicker ariaLabel="Отсутствует с" className="h-10" dateKey={from} minDateKey={arrivalDate} maxDateKey={departureDate} disabled={busy || preview !== null} onChange={(next) => {setFrom(next);if(to<next)setTo(next)}}/>
               </Label>
               <Label className="grid gap-1.5 text-sm">По (включительно)
-                <Input type="date" className="h-10" min={from} max={lastDay} value={to} disabled={busy || preview !== null} onChange={(event) => setTo(event.target.value)}/>
+                <DatePicker ariaLabel="Отсутствует по (включительно)" className="h-10" dateKey={to} minDateKey={from} maxDateKey={departureDate} disabled={busy || preview !== null} onChange={setTo}/>
               </Label>
             </div>
             {preview && (

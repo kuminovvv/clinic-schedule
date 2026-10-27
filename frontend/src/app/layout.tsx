@@ -2,6 +2,7 @@ import type {Metadata} from "next";
 import localFont from "next/font/local";
 import {AppHeader} from "@/widgets/app-header/ui/app-header";
 import {Toaster} from "@/shared/ui/shadcn/toast";
+import "react-day-picker/style.css";
 import "./globals.css";
 
 // Official Geist font files from the pinned `geist` package, bundled locally.

@@ -10,6 +10,7 @@ import type {
 import {canScheduleAt, type WorkDay, type TimeStepMinutes} from "@/entities/calendar-settings"
 import { formatDateTimeLocal } from "@/shared/lib/calendar-date"
 import { Button } from "@/shared/ui/shadcn/button"
+import { DatePicker } from "@/shared/ui/shadcn/date-picker"
 import { Input } from "@/shared/ui/shadcn/input"
 import { Label } from "@/shared/ui/shadcn/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/shared/ui/shadcn/select"
@@ -184,15 +185,14 @@ export function AppointmentDialog({
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <Label className="block space-y-1.5 text-sm font-medium text-slate-700 sm:col-span-3">
               Дата
-              <Input
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-normal outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
-                onChange={(event) => {
-                if (endDate === date) setEndDate(event.target.value)
-                setDate(event.target.value)
+              <DatePicker
+                ariaLabel="Дата записи"
+                className="h-11 rounded-xl px-3 text-base"
+                dateKey={date}
+                onChange={(nextDate) => {
+                  if (endDate === date || endDate < nextDate) setEndDate(nextDate)
+                  setDate(nextDate)
                 }}
-                required
-                type="date"
-                value={date}
               />
             </Label>
             <Label className="block space-y-1.5 text-sm font-medium text-slate-700">
@@ -219,13 +219,12 @@ export function AppointmentDialog({
             </Label>
             <Label className="block space-y-1.5 text-sm font-medium text-slate-700 sm:col-span-3">
               Дата окончания
-              <Input
-                className="h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-base font-normal outline-none transition focus:border-blue-400 focus:ring-4 focus:ring-blue-100"
-                min={date}
-                onChange={(event) => setEndDate(event.target.value)}
-                required
-                type="date"
-                value={endDate}
+              <DatePicker
+                ariaLabel="Дата окончания записи"
+                className="h-11 rounded-xl px-3 text-base"
+                dateKey={endDate}
+                minDateKey={date}
+                onChange={setEndDate}
               />
             </Label>
             <Label className="block space-y-1.5 text-sm font-medium text-slate-700">

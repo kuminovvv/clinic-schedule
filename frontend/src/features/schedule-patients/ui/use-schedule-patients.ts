@@ -1,45 +1,42 @@
 "use client"
 
 import {useCallback, useEffect, useRef, useState} from "react"
-import {useRouter} from "next/navigation"
 import type {Procedure} from "@/entities/procedure"
 import {BackendRequestError, sendBackendRequest} from "@/shared/api/backend-client"
 import {notify} from "@/shared/lib/notifications"
 import type {PatientPlan, SavedDayPlan, Severity} from "../model/types"
-
-type SchedulePreview = {
-    scheduledCount: number
-    unscheduledCount: number
-    unscheduledPatientNumbers: number[]
-    warnings: string[]
-}
+import {addCalendarDays, inclusiveDayCount} from "@/shared/lib/date-range"
+import {useScheduleGeneration} from "./use-schedule-generation"
+import {useProcedureCatalog} from "./use-procedure-catalog"
+import {applyCatalogPrerequisites, getPatientPlanIssue, initialProcedureSessionCount} from "../model/patient-plan-rules"
 
 const planContentKey = (plans: PatientPlan[], selectedPatientNumber: number | null) =>
     JSON.stringify({plans, selectedPatientNumber})
 
 export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedures: Procedure[]; initialPlan: SavedDayPlan; dateKey: string}) => {
-    const router = useRouter()
     const [plans, setPlans] = useState<PatientPlan[]>(initialPlan.plans)
-    const [procedureDrafts, setProcedureDrafts] = useState(procedures)
+    const {procedureDrafts, setProcedureDraftsWithVersion, procedureSaveQueue, procedureSaveFailed, procedureSaveError,
+        validProcedures, updateProcedure, addProcedure, removeProcedure, flushProcedureSaves} = useProcedureCatalog(procedures, plans, setPlans)
     const [selectedPatientNumber, setSelectedPatientNumber] = useState<number | null>(initialPlan.selectedPatientNumber)
     const [saveError, setSaveError] = useState(false)
     const [planConflict, setPlanConflict] = useState(false)
     const [isGenerating, setIsGenerating] = useState(false)
-    const confirmationId = `course-confirm:${dateKey}`
-    const currentCourseKey = JSON.stringify({plans, procedureDrafts, selectedPatientNumber})
-    const currentCourseKeyRef = useRef(currentCourseKey)
-    const procedureSaveQueue = useRef(Promise.resolve())
     const planRevision = useRef(initialPlan.revision)
     const lastSavedPlan = useRef(planContentKey(initialPlan.plans, initialPlan.selectedPatientNumber))
     const planSaveQueue = useRef(Promise.resolve())
     const planSaveTimer = useRef<number | null>(null)
     const planConflictRef = useRef(false)
+    const planIssue = getPatientPlanIssue(plans, procedureDrafts, dateKey)
+    const previousIssueRef = useRef(planIssue)
 
     useEffect(() => {
-        currentCourseKeyRef.current = currentCourseKey
-        notify.dismiss(confirmationId)
-        return () => notify.dismiss(confirmationId)
-    }, [confirmationId, currentCourseKey])
+        const previousIssue = previousIssueRef.current
+        previousIssueRef.current = planIssue
+        if (!planIssue || planIssue === previousIssue) return
+        // Wait for rapid changes in number inputs to settle before notifying.
+        const timer = window.setTimeout(() => notify.constraint("Проверьте назначения пациента", planIssue), 650)
+        return () => window.clearTimeout(timer)
+    }, [planIssue])
 
     const savePlanDraft = useCallback(async (draftPlans: PatientPlan[], draftSelectedPatientNumber: number | null) => {
         const contentKey = planContentKey(draftPlans, draftSelectedPatientNumber)
@@ -57,7 +54,7 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
     }, [dateKey])
 
     useEffect(() => {
-        if (planContentKey(plans, selectedPatientNumber) === lastSavedPlan.current || planConflictRef.current) return
+        if (planContentKey(plans, selectedPatientNumber) === lastSavedPlan.current || planConflictRef.current || planIssue) return
         planSaveTimer.current = window.setTimeout(() => {
             planSaveTimer.current = null
             planSaveQueue.current = planSaveQueue.current.then(async () => {
@@ -78,12 +75,12 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
         return () => {
             if (planSaveTimer.current !== null) window.clearTimeout(planSaveTimer.current)
         }
-    }, [plans, selectedPatientNumber, savePlanDraft])
+    }, [plans, selectedPatientNumber, savePlanDraft, planIssue])
 
     const addPatient = () => {
         const patientNumber = Math.max(0, ...plans.map((item) => item.patientNumber)) + 1
         setSelectedPatientNumber(patientNumber)
-        setPlans((all) => [...all, {patientNumber, severity: "medium", stayDays: 7, procedureIds: [], procedureCounts: {}}])
+        setPlans((all) => [...all, {patientNumber, severity: "medium", arrivalDate: dateKey, departureDate: addCalendarDays(dateKey, 6), stayDays: 7, procedureIds: [], procedureCounts: {}, procedurePrerequisites: {}}])
     }
     const removePatient = (patientNumber: number) => {
         const remaining = plans.filter((plan) => plan.patientNumber !== patientNumber)
@@ -91,201 +88,66 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
         if (selectedPatientNumber === patientNumber) setSelectedPatientNumber(remaining[0]?.patientNumber ?? null)
     }
     const changeSeverity = (patientNumber: number, severity: Severity) =>
-        setPlans((all) => all.map((plan) => plan.patientNumber === patientNumber ? {...plan, severity} : plan))
-    const changeStay = (patientNumber: number, stayDays: number) => {
+        setPlans((all) => all.map((plan) => plan.patientNumber === patientNumber
+            ? applyCatalogPrerequisites({...plan, severity, procedurePrerequisiteOverrides: severity === "high" ? plan.procedurePrerequisiteOverrides : {}}, procedureDrafts)
+            : plan))
+    const changeTreatmentRange = (patientNumber: number, arrivalDate: string, departureDate: string) => {
+        const stayDays = inclusiveDayCount(arrivalDate, departureDate)
         if (!Number.isInteger(stayDays) || stayDays < 1 || stayDays > 365) return
-        const selected = plans.find((plan) => plan.patientNumber === patientNumber)
-        if (selected) {
-            for (const id of selected.procedureIds) {
-                const procedure = procedureDrafts.find((item) => item.id === id)
-                if (!procedure) continue
-                const existing = selected.procedureCounts[id] ?? 1
-                const defaultBefore = Math.max(1, Math.ceil(selected.stayDays * procedure.defaultWeeklyCount / 7))
-                const count = existing === defaultBefore ? Math.max(1, Math.ceil(stayDays * procedure.defaultWeeklyCount / 7)) : existing
-                if (count > stayDays || (count - 1) * procedure.minIntervalDays >= stayDays) {
-                    notify.warning("Назначения не помещаются в новый срок", `Пациент ${patientNumber}: ${count} сеансов «${procedure.name}» с интервалом ${procedure.minIntervalDays} дн. не помещаются в ${stayDays} дн.`)
-                    break
-                }
-                if (procedure.minIntervalDays > stayDays) {
-                    notify.warning("Интервал длиннее срока пребывания", `Пациент ${patientNumber}: у процедуры «${procedure.name}» интервал ${procedure.minIntervalDays} дн., а срок ${stayDays} дн.`)
-                    break
-                }
-            }
-        }
         setPlans((all) => all.map((plan) => {
             if (plan.patientNumber !== patientNumber) return plan
-            const procedureCounts = {...plan.procedureCounts}
-            for (const id of plan.procedureIds) {
-                const procedure = procedureDrafts.find((item) => item.id === id)
-                const weeklyCount = procedure?.defaultWeeklyCount ?? 1
-                const suggestedBefore = Math.max(1, Math.ceil(plan.stayDays * weeklyCount / 7))
-                if (procedureCounts[id] === suggestedBefore) procedureCounts[id] = Math.max(1, Math.ceil(stayDays * weeklyCount / 7))
-            }
-            return {...plan, stayDays, procedureCounts}
+            // Changing dates must not silently replace explicitly assigned
+            // sessions with new catalog defaults.
+            return applyCatalogPrerequisites({...plan, arrivalDate, departureDate, stayDays}, procedureDrafts)
         }))
     }
     const changeProcedureCount = (patientNumber: number, procedureId: string, count: number) => {
         if (!Number.isInteger(count) || count < 1 || count > 365) return
-        const patient = plans.find((item) => item.patientNumber === patientNumber)
-        const procedure = procedureDrafts.find((item) => item.id === procedureId)
-        if (patient && procedure && (count > patient.stayDays || (count - 1) * procedure.minIntervalDays >= patient.stayDays)) {
-            notify.warning("Сеансы не помещаются в курс", `Пациент ${patientNumber}: ${count} повторений «${procedure.name}» не укладываются в ${patient.stayDays} дн. с интервалом ${procedure.minIntervalDays} дн.`)
-        }
         setPlans((all) => all.map((plan) => plan.patientNumber === patientNumber
-            ? {...plan, procedureCounts: {...plan.procedureCounts, [procedureId]: count}} : plan))
+            ? applyCatalogPrerequisites({...plan, procedureCounts: {...plan.procedureCounts, [procedureId]: count}}, procedureDrafts) : plan))
+    }
+    const changeProcedurePrerequisite = (patientNumber: number, procedureId: string, prerequisiteId: string | null | "catalog") => {
+        setPlans((all) => all.map((plan) => {
+            if (plan.patientNumber !== patientNumber) return plan
+            const procedurePrerequisites = {...plan.procedurePrerequisites}
+            const procedurePrerequisiteOverrides = {...plan.procedurePrerequisiteOverrides}
+            delete procedurePrerequisites[procedureId]
+            if (prerequisiteId === "catalog") {
+                delete procedurePrerequisiteOverrides[procedureId]
+            } else {
+                procedurePrerequisiteOverrides[procedureId] = prerequisiteId
+            }
+            return applyCatalogPrerequisites({...plan, procedurePrerequisites, procedurePrerequisiteOverrides}, procedureDrafts)
+        }))
     }
     const toggleProcedure = (procedureId: string, checked: boolean) => {
-        if (checked) {
-            const patient = plans.find((item) => item.patientNumber === selectedPatientNumber)
-            const procedure = procedureDrafts.find((item) => item.id === procedureId)
-            if (patient && procedure) {
-                const count = Math.max(1, Math.ceil(patient.stayDays * procedure.defaultWeeklyCount / 7))
-                if (count > patient.stayDays || (count - 1) * procedure.minIntervalDays >= patient.stayDays) {
-                    notify.warning("Сеансы не помещаются в курс", `Пациент ${patient.patientNumber}: ${count} повторений «${procedure.name}» не укладываются в ${patient.stayDays} дн.`)
-                } else if (procedure.minIntervalDays > patient.stayDays) {
-                    notify.warning("Интервал длиннее срока пребывания", `У процедуры «${procedure.name}» интервал ${procedure.minIntervalDays} дн., а курс длится ${patient.stayDays} дн.`)
-                }
-            }
-        }
         setPlans((all) => all.map((plan) => {
         if (plan.patientNumber !== selectedPatientNumber) return plan
         const procedureIds = checked ? [...plan.procedureIds, procedureId] : plan.procedureIds.filter((id) => id !== procedureId)
         const procedureCounts = {...plan.procedureCounts}
+        const removedLinkedTargets = !checked ? Object.entries(plan.procedurePrerequisites ?? {})
+            .filter(([, prerequisiteId]) => prerequisiteId === procedureId)
+            .map(([targetId]) => targetId) : []
+        const procedurePrerequisites = Object.fromEntries(Object.entries(plan.procedurePrerequisites ?? {}).filter(([targetId, prerequisiteId]) => checked || targetId !== procedureId && prerequisiteId !== procedureId))
+        const procedurePrerequisiteOverrides = {...plan.procedurePrerequisiteOverrides}
+        if (!checked) {
+            delete procedurePrerequisiteOverrides[procedureId]
+            for (const targetId of removedLinkedTargets) procedurePrerequisiteOverrides[targetId] = null
+        }
         if (checked) {
             const procedure = procedureDrafts.find((item) => item.id === procedureId)
-            procedureCounts[procedureId] = Math.max(1, Math.ceil(plan.stayDays * (procedure?.defaultWeeklyCount ?? 1) / 7))
+            procedureCounts[procedureId] = initialProcedureSessionCount(procedure, plan.stayDays)
         } else delete procedureCounts[procedureId]
-        return {...plan, procedureIds, procedureCounts}
+        return applyCatalogPrerequisites({...plan, procedureIds, procedureCounts, procedurePrerequisites, procedurePrerequisiteOverrides}, procedureDrafts)
         }))
     }
-    const persistProcedureDrafts = (nextProcedures: Procedure[]) => {
-        setProcedureDrafts(nextProcedures)
-        procedureSaveQueue.current = procedureSaveQueue.current.then(async () => {
-            try {
-                await sendBackendRequest<Procedure[]>("/v1/procedures", "PUT", nextProcedures)
-                setSaveError(false)
-            } catch {
-                setSaveError(true)
-            }
-        })
-    }
-    const updateProcedure = (id: string, changes: Partial<Procedure>) =>
-        persistProcedureDrafts(procedureDrafts.map((procedure) => procedure.id === id ? {...procedure, ...changes} : procedure))
-    const addProcedure = () => persistProcedureDrafts([
-        ...procedureDrafts,
-        {
-            id: crypto.randomUUID(),
-            name: "Процедура " + (procedureDrafts.length + 1),
-            durationMinutes: 30,
-            preparationMinutes: 20,
-            isRelaxing: false,
-            minIntervalDays: 1,
-            defaultWeeklyCount: 1,
-            room: "",
-        },
-    ])
-    const removeProcedure = (id: string) => {
-        procedureSaveQueue.current = procedureSaveQueue.current.then(async () => {
-            try {
-                await sendBackendRequest<null>("/v1/procedures/" + encodeURIComponent(id), "DELETE")
-                setProcedureDrafts((all) => all.filter((procedure) => procedure.id !== id))
-                setPlans((all) => all.map((plan) => ({
-                    ...plan,
-                    procedureIds: plan.procedureIds.filter((procedureId) => procedureId !== id),
-                    procedureCounts: Object.fromEntries(Object.entries(plan.procedureCounts).filter(([procedureId]) => procedureId !== id)),
-                })))
-                setSaveError(false)
-            } catch (error) {
-                if (!(error instanceof BackendRequestError && error.status === 409)) setSaveError(true)
-            }
-        })
-    }
-    const validProcedures = procedureDrafts.every((procedure) =>
-        procedure.name.trim() && Number.isInteger(procedure.durationMinutes) && procedure.durationMinutes >= 1 && procedure.durationMinutes <= 420 &&
-        Number.isInteger(procedure.preparationMinutes) && procedure.preparationMinutes >= 0 && procedure.durationMinutes + procedure.preparationMinutes <= 420 &&
-        Number.isInteger(procedure.minIntervalDays) && procedure.minIntervalDays >= 1 && procedure.minIntervalDays <= 365 &&
-        Number.isInteger(procedure.defaultWeeklyCount) && procedure.defaultWeeklyCount >= 1 && procedure.defaultWeeklyCount <= 7 &&
-        (procedure.room === undefined || procedure.room.trim().length <= 80),
-    )
-    useEffect(() => {
-        if (!validProcedures) {
-            notify.warning("Проверьте параметры процедур", "Длительность: 1–420 мин, интервал: 1–365 дней, количество в неделю: 1–7, кабинет: не более 80 символов.")
-        }
-    }, [validProcedures])
-    const validPlans = plans.every((plan) => Number.isInteger(plan.stayDays) && plan.stayDays >= 1 && plan.stayDays <= 365 &&
-        plan.procedureIds.every((id) => Number.isInteger(plan.procedureCounts[id]) && plan.procedureCounts[id] >= 1 && plan.procedureCounts[id] <= plan.stayDays))
-    const finishGeneration = async () => {
-        setIsGenerating(true)
-        try {
-            await sendBackendRequest("/v1/schedules/generate", "POST", {date: dateKey})
-            router.push("/?date=" + dateKey)
-        } catch {
-            // Shared API interceptor displays the reason.
-        } finally {
-            setIsGenerating(false)
-        }
-    }
-    const submit = async () => {
-        if (!validProcedures || !validPlans || planConflictRef.current || isGenerating) return
-        setIsGenerating(true)
-        if (planSaveTimer.current !== null) {
-            window.clearTimeout(planSaveTimer.current)
-            planSaveTimer.current = null
-        }
-        const savedProcedures = procedureDrafts.map((procedure) => ({...procedure, name: procedure.name.trim()}))
-        setProcedureDrafts(savedProcedures)
-        try {
-            await procedureSaveQueue.current
-            await sendBackendRequest<Procedure[]>("/v1/procedures", "PUT", savedProcedures)
-            await planSaveQueue.current
-            await savePlanDraft(plans, selectedPatientNumber)
-            setSaveError(false)
-        } catch (error) {
-            setSaveError(true)
-            if (error instanceof BackendRequestError && error.status === 409) {
-                planConflictRef.current = true
-                setPlanConflict(true)
-            }
-            setIsGenerating(false)
-            return
-        }
-        if (!plans.some((plan) => plan.procedureIds.length)) {
-            setIsGenerating(false)
-            return
-        }
-        try {
-            const preview = await sendBackendRequest<SchedulePreview>("/v1/schedules/generate", "POST", {date: dateKey, preview: true})
-            if (preview && preview.unscheduledCount > 0) {
-                notify.constraint(
-                    "Не все сеансы помещаются в курс",
-                    `Не удалось разместить ${preview.unscheduledCount} сеансов. Пациенты: ${preview.unscheduledPatientNumbers.join(", ")}. Уменьшите число сеансов или измените интервалы и срок пребывания.`,
-                )
-                return
-            }
-            if (preview?.warnings?.length) {
-                const previewCourseKey = JSON.stringify({plans, procedureDrafts: savedProcedures, selectedPatientNumber})
-                notify.confirmConstraint(
-                    confirmationId,
-                    "Проверьте ограничения курса",
-                    preview.warnings.join("\n"),
-                    () => {
-                        if (currentCourseKeyRef.current !== previewCourseKey) {
-                            notify.constraint("Назначения изменились", "Проверьте курс и нажмите «Составить курс процедур» ещё раз.")
-                            return
-                        }
-                        void finishGeneration()
-                    },
-                )
-                return
-            }
-            await sendBackendRequest("/v1/schedules/generate", "POST", {date: dateKey})
-            router.push("/?date=" + dateKey)
-        } catch {
-            // The shared API interceptor explains why generation was blocked.
-        } finally {
-            setIsGenerating(false)
-        }
-    }
+    const validPlans = planIssue === null
+    const {changeCourseDate, flushPlanSaves, submit} = useScheduleGeneration({
+        plans, procedureDrafts, setProcedureDrafts: setProcedureDraftsWithVersion, selectedPatientNumber, dateKey,
+        validProcedures, validPlans, planIssue, isGenerating, setIsGenerating, setSaveError,
+        planConflictRef, setPlanConflict, procedureSaveQueue, procedureSaveFailed,
+        planSaveQueue, planSaveTimerRef: planSaveTimer, lastSavedPlan, savePlanDraft,
+    })
 
-    return {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, saveError, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeStay, changeProcedureCount, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, validPlans, submit}
+    return {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, saveError: saveError || procedureSaveError, planIssue, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeTreatmentRange, changeProcedureCount, changeProcedurePrerequisite, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, validPlans, flushProcedureSaves, flushPlanSaves, changeCourseDate, submit}
 }

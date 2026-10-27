@@ -9,13 +9,15 @@ import {Label} from "@/shared/ui/shadcn/label"
 import {Input} from "@/shared/ui/shadcn/input"
 import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@/shared/ui/shadcn/select"
 import {Switch} from "@/shared/ui/shadcn/switch"
-import {StayDurationControl} from "./stay-duration-control"
+import {PatientTreatmentRange} from "./patient-treatment-range"
 import {PatientAbsenceControl} from "./patient-absence-control"
+import {formatDateLabel} from "@/shared/lib/date-range"
+import {requiredRelaxingSessions} from "../model/patient-plan-rules"
 
 const severityLabels: Record<Severity, string> = {high: "Высокая", medium: "Средняя", low: "Низкая"}
 
 type PatientSelectionPanelProps = {
-  admissionDateKey: string
+	courseKey: string
   plans: PatientPlan[]
   procedures: Procedure[]
   selectedPatientNumber: number | null
@@ -23,13 +25,16 @@ type PatientSelectionPanelProps = {
   onAddPatientAction: () => void
   onRemovePatientAction: (patientNumber: number) => void
   onChangeSeverityAction: (patientNumber: number, severity: Severity) => void
-  onChangeStayAction: (patientNumber: number, stayDays: number) => void
+	onChangeTreatmentRangeAction: (patientNumber: number, arrivalDate: string, departureDate: string) => void
   onChangeProcedureCountAction: (patientNumber: number, procedureId: string, count: number) => void
+  onChangeProcedurePrerequisiteAction: (patientNumber: number, procedureId: string, prerequisiteId: string | null) => void
   onToggleProcedureAction: (procedureId: string, checked: boolean) => void
 }
 
-export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, selectedPatientNumber, onSelectPatientAction, onAddPatientAction, onRemovePatientAction, onChangeSeverityAction, onChangeStayAction, onChangeProcedureCountAction, onToggleProcedureAction}: PatientSelectionPanelProps) => {
+export const PatientSelectionPanel = ({courseKey, plans, procedures, selectedPatientNumber, onSelectPatientAction, onAddPatientAction, onRemovePatientAction, onChangeSeverityAction, onChangeTreatmentRangeAction, onChangeProcedureCountAction, onChangeProcedurePrerequisiteAction, onToggleProcedureAction}: PatientSelectionPanelProps) => {
   const selectedPlan = plans.find((plan) => plan.patientNumber === selectedPatientNumber)
+  const requiredRelaxing = selectedPlan ? requiredRelaxingSessions(selectedPlan) : {}
+  const relaxingOptions = procedures.filter((procedure) => procedure.isRelaxing)
   return (
     <div className="grid gap-4 lg:min-h-0 lg:flex-1 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)] lg:grid-rows-1">
       <aside aria-label="Список пациентов" className="flex min-h-0 flex-col rounded-[20px] bg-white p-3">
@@ -44,7 +49,7 @@ export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, sele
               <div className={`rounded-lg border p-2 ${isSelected ? "border-blue-200 bg-blue-50/60" : "border-slate-200 bg-white"}`} key={plan.patientNumber}>
                 <div className="flex min-w-0 items-center gap-1">
                   <Button aria-pressed={isSelected} className="h-auto min-w-0 flex-1 justify-start rounded-md px-2 py-1.5 text-left hover:bg-white/80" onClick={() => onSelectPatientAction(plan.patientNumber)} type="button" variant="ghost">
-                    <span className="min-w-0"><span className="block whitespace-nowrap text-sm font-medium">Пациент {plan.patientNumber}</span><span className="block text-xs font-normal text-slate-500">{plan.stayDays} дн. · {plan.procedureIds.reduce((sum, id) => sum + (plan.procedureCounts[id] ?? 1), 0)} сеансов</span></span>
+                    <span className="min-w-0"><span className="block whitespace-nowrap text-sm font-medium">Пациент {plan.patientNumber}</span><span className="block truncate text-xs font-normal text-slate-500">Поступление: {formatDateLabel(plan.arrivalDate)} · выезд: {formatDateLabel(plan.departureDate)} · {plan.procedureIds.reduce((sum, id) => sum + (plan.procedureCounts[id] ?? 1), 0)} сеансов</span></span>
                   </Button>
                   <Select onValueChange={(value) => value && onChangeSeverityAction(plan.patientNumber, value as Severity)} value={plan.severity}>
                     <SelectTrigger aria-label={`Степень тяжести: пациент ${plan.patientNumber}`} className="h-8 w-25 shrink-0 rounded-md px-2 text-xs"><SelectValue>{severityLabels[plan.severity]}</SelectValue></SelectTrigger>
@@ -61,24 +66,49 @@ export const PatientSelectionPanel = ({admissionDateKey, plans, procedures, sele
       <section aria-label="Назначение процедур" className="flex min-h-0 min-w-0 flex-col rounded-[20px] bg-white p-3 sm:p-4">
         {selectedPlan ? <Fragment key={selectedPlan.patientNumber}>
           <div className="mb-3 flex flex-wrap items-start justify-between gap-2"><h2 className="text-sm font-semibold">Процедуры пациента {selectedPlan.patientNumber}</h2><span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs text-slate-600">Выбрано: {selectedPlan.procedureIds.length} видов</span></div>
-          <StayDurationControl
-            admissionDateKey={admissionDateKey}
-            stayDays={selectedPlan.stayDays}
-            onChange={(days) => onChangeStayAction(selectedPlan.patientNumber, days)}
-          />
-          <PatientAbsenceControl dateKey={admissionDateKey} patientNumber={selectedPlan.patientNumber} stayDays={selectedPlan.stayDays}/>
-          <div className="max-h-[40vh] overflow-y-auto rounded-lg border border-slate-100 p-2 lg:min-h-0 lg:max-h-none lg:flex-1">
+	          <PatientTreatmentRange
+	            courseKey={courseKey}
+	            arrivalDate={selectedPlan.arrivalDate}
+	            departureDate={selectedPlan.departureDate}
+	            onChange={(arrivalDate, departureDate) => onChangeTreatmentRangeAction(selectedPlan.patientNumber, arrivalDate, departureDate)}
+	          />
+	          <PatientAbsenceControl courseKey={courseKey} patientNumber={selectedPlan.patientNumber} arrivalDate={selectedPlan.arrivalDate} departureDate={selectedPlan.departureDate}/>
+          <div className="max-h-[40vh] overflow-y-auto lg:min-h-0 lg:max-h-none lg:flex-1">
             {procedures.length ? <div className="grid gap-2 xl:grid-cols-2">{procedures.map((procedure) => {
               const selected = selectedPlan.procedureIds.includes(procedure.id)
               const count = selectedPlan.procedureCounts[procedure.id] ?? 1
-              return <div className="min-w-0 rounded-lg border border-slate-100 px-2 py-2 text-sm text-slate-700 hover:bg-slate-50" key={procedure.id}>
+              const automaticallyAssigned = selected && procedure.isRelaxing && (requiredRelaxing[procedure.id] ?? 0) > 0
+              return <div className="min-w-0 rounded-lg border border-slate-200 px-2 py-2 text-sm text-slate-700 hover:bg-slate-50" key={procedure.id}>
                 <div className="flex min-w-0 items-center gap-2">
                   <Switch aria-label={`Процедура: ${procedure.name}`} checked={selected} onCheckedChange={(checked) => onToggleProcedureAction(procedure.id, checked)} size="sm"/>
-                  <div className="min-w-0 flex-1"><span className="block truncate font-medium">{procedure.name}</span><span className="block text-xs text-slate-500">{procedure.durationMinutes + procedure.preparationMinutes} мин в расписании ({procedure.durationMinutes} + {procedure.preparationMinutes} подготовка) · интервал {procedure.minIntervalDays} дн. · {procedure.defaultWeeklyCount}/нед.{procedure.room?.trim() ? ` · каб. ${procedure.room.trim()}` : ""}{procedure.isRelaxing ? " · расслабляющая" : ""}</span></div>
-                  {selected && <Label className="flex shrink-0 items-center gap-1 text-xs">Сеансов
-                    <Input aria-label={`Количество сеансов: ${procedure.name}`} className="h-8 w-16 rounded-md px-2 text-sm" type="number" step={1} min={1} max={365} value={count} onChange={(event) => onChangeProcedureCountAction(selectedPlan.patientNumber, procedure.id, Number(event.target.value))}/>
+                  <div className="min-w-0 flex-1"><span className="block truncate font-medium" title={procedure.name}>{procedure.name}</span></div>
+                  {selected && <Label className="flex shrink-0 items-center gap-1 text-xs" title={automaticallyAssigned ? "Подготовительные сеансы рассчитываются автоматически по назначениям пациента." : undefined}>{automaticallyAssigned ? "Авто" : "Сеансов"}
+                    <Input aria-label={`Количество сеансов: ${procedure.name}`} className="h-8 w-16 rounded-md px-2 text-sm" disabled={automaticallyAssigned} type="number" step={1} min={1} max={365} value={count} onChange={(event) => onChangeProcedureCountAction(selectedPlan.patientNumber, procedure.id, Number(event.target.value))}/>
                   </Label>}
                 </div>
+                {selected && selectedPlan.severity === "high" && !procedure.isRelaxing && (relaxingOptions.length > 0 || selectedPlan.procedurePrerequisites?.[procedure.id]) && <div className="mt-2 pl-7">
+                  <Label className="mb-1 block text-xs text-slate-600">Подготовка перед процедурой</Label>
+                  <Select onValueChange={(value) => value && onChangeProcedurePrerequisiteAction(selectedPlan.patientNumber, procedure.id, value === "catalog" ? "catalog" : value === "none" ? null : value)}
+                    value={Object.prototype.hasOwnProperty.call(selectedPlan.procedurePrerequisiteOverrides ?? {}, procedure.id)
+                      ? selectedPlan.procedurePrerequisiteOverrides?.[procedure.id] ?? "none" : "catalog"}>
+                    <SelectTrigger aria-label={`Расслабляющая процедура перед ${procedure.name}`} className="h-8 w-full rounded-md px-2 text-xs sm:max-w-72">
+                      <SelectValue>{(() => {
+                        const override = selectedPlan.procedurePrerequisiteOverrides?.[procedure.id]
+                        const hasOverride = Object.prototype.hasOwnProperty.call(selectedPlan.procedurePrerequisiteOverrides ?? {}, procedure.id)
+                        const assignedName = relaxingOptions.find((option) => option.id === override)?.name
+                        const catalogName = relaxingOptions.find((option) => option.id === procedure.defaultPrerequisiteId)?.name
+                        return !hasOverride ? `По каталогу: ${catalogName ?? "не требуется"}` : override === null ? "Не требуется" : assignedName ?? "Процедура недоступна"
+                      })()}</SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="catalog">По каталогу: {relaxingOptions.find((option) => option.id === procedure.defaultPrerequisiteId)?.name ?? "не требуется"}</SelectItem>
+                      <SelectItem value="none">Не требуется (для этого пациента)</SelectItem>
+                      {relaxingOptions.map((relaxing) =>
+                        <SelectItem key={relaxing.id} value={relaxing.id}>{relaxing.name}</SelectItem>
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>}
               </div>
             })}</div> : <p className="px-3 py-8 text-center text-sm text-slate-500">В каталоге пока нет процедур. Добавьте их в разделе «Каталог процедур».</p>}
           </div>

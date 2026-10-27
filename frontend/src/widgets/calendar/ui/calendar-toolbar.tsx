@@ -7,6 +7,7 @@ import {
 } from "@/shared/lib/icons"
 import { Button } from "@/shared/ui/shadcn/button"
 import { formatWeekLabel } from "@/shared/lib/calendar-date"
+import {getPatientColorMarkerStyle} from "./patient-colors"
 
 type CalendarToolbarProps = {
   date: Date
@@ -26,7 +27,7 @@ const dateFormatter = new Intl.DateTimeFormat("ru-RU", {
   month: "long",
 })
 
-const patientTabClassName = "flex h-8 shrink-0 cursor-pointer items-center justify-center whitespace-nowrap rounded-lg px-3 text-sm font-medium text-slate-600 outline-none transition-colors hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset data-active:bg-white data-active:text-slate-950 data-active:shadow-sm"
+const patientTabClassName = "flex h-8 shrink-0 cursor-pointer items-center justify-center gap-2 whitespace-nowrap rounded-lg px-3 text-sm font-medium text-slate-600 outline-none transition-colors hover:text-slate-900 focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-inset data-active:bg-white data-active:text-slate-950 data-active:shadow-sm"
 
 export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSchedule, isClearingSchedule, patientNumbers, selectedPatientNumber, onSelectPatient }: CalendarToolbarProps) {
   const pointerDrag = useRef<{id: number; x: number; scrollLeft: number; moved: boolean} | null>(null)
@@ -121,6 +122,7 @@ export function CalendarToolbar({ date, onMoveWeek, onToday, onCreate, onClearSc
                     value={String(patientNumber)}
                     className={patientTabClassName}
                   >
+                    <span aria-hidden="true" className="inline-block size-2.5 rounded-full" style={getPatientColorMarkerStyle(patientNumber)}/>
                     Пациент {patientNumber}
                   </Tabs.Tab>
                 ))}

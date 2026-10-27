@@ -1,9 +1,13 @@
 "use client"
 
 import Link from "next/link"
+import {useRouter} from "next/navigation"
+import type {MouseEvent} from "react"
 import {Add01StrokeRoundedIcon as Plus} from "@/shared/lib/icons"
 import type {Procedure} from "@/entities/procedure"
 import {Button} from "@/shared/ui/shadcn/button"
+import {DatePicker} from "@/shared/ui/shadcn/date-picker"
+import {Label} from "@/shared/ui/shadcn/label"
 import type {SavedDayPlan} from "../model/types"
 import {PatientSelectionPanel} from "./patient-selection-panel"
 import {ProcedureCatalog} from "./procedure-catalog"
@@ -17,7 +21,13 @@ type Props = {
 }
 
 export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Props) => {
-    const {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeStay, changeProcedureCount, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, validPlans, submit} = useSchedulePatients({procedures, initialPlan, dateKey})
+    const router = useRouter()
+    const {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeTreatmentRange, changeProcedureCount, changeProcedurePrerequisite, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, flushProcedureSaves, flushPlanSaves, changeCourseDate, submit} = useSchedulePatients({procedures, initialPlan, dateKey})
+    const handleTabNavigation = async (event: MouseEvent<HTMLAnchorElement>, href: string) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+        event.preventDefault()
+        if (await flushProcedureSaves() && await flushPlanSaves()) router.push(href)
+    }
     const view = tab
     return (
         <main
@@ -34,6 +44,8 @@ export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Pr
                             <Link
                                 key={key}
                                 href={href}
+                                prefetch={false}
+                                onClick={(event) => void handleTabNavigation(event, href)}
                                 aria-current={view === key ? "page" : undefined}
                                 className={`flex h-10 min-w-0 items-center justify-center rounded-xl px-3 text-center text-[13px] font-medium transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2 sm:px-5 sm:text-sm ${
                                     view === key
@@ -47,8 +59,14 @@ export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Pr
                     </nav>
                     <div className="flex items-center justify-end gap-2 sm:ml-auto">
                         {view === "patients" && (
+                            <Label className="flex items-center gap-2 text-xs text-slate-600">
+                                Дата плана
+                                <DatePicker ariaLabel="Дата плана" className="h-9 w-36 rounded-lg px-2 text-sm" dateKey={dateKey} disabled={isGenerating || planConflict} onChange={(nextDate) => void changeCourseDate(nextDate)}/>
+                            </Label>
+                        )}
+                        {view === "patients" && (
                             <Button className="rounded-xl bg-blue-600 px-4 text-white hover:bg-blue-700"
-                                disabled={!plans.some((plan) => plan.procedureIds.length) || !validProcedures || !validPlans || planConflict || isGenerating}
+                                disabled={!plans.some((plan) => plan.procedureIds.length) || !validProcedures || planConflict || isGenerating}
                                     onClick={submit} type="button">
                                 {isGenerating ? "Составляем…" : "Составить курс процедур"}
                             </Button>
@@ -64,11 +82,12 @@ export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Pr
 
                 {view === "patients" ? (
                     <PatientSelectionPanel
-                        admissionDateKey={dateKey}
+                        courseKey={dateKey}
                         onAddPatientAction={addPatient}
                         onChangeSeverityAction={changeSeverity}
-                        onChangeStayAction={changeStay}
+                        onChangeTreatmentRangeAction={changeTreatmentRange}
                         onChangeProcedureCountAction={changeProcedureCount}
+                        onChangeProcedurePrerequisiteAction={changeProcedurePrerequisite}
                         onRemovePatientAction={removePatient}
                         onSelectPatientAction={setSelectedPatientNumber}
                         onToggleProcedureAction={toggleProcedure}
