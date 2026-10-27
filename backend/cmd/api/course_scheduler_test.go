@@ -72,8 +72,8 @@ func TestHighSeverityStartsWithRelaxingProcedure(t *testing.T) {
 func TestCourseWarnsIfIntervalExceedsStay(t *testing.T) {
 	procedures := map[string]procedure{"p": {ID: "p", Name: "Терапия", MinIntervalDays: 14}}
 	warnings := courseWarnings([]patientPlan{testCoursePlan(7, 1, "high", "p")}, procedures)
-	if len(warnings) != 1 {
-		t.Fatalf("expected warning for an interval greater than stay: %+v", warnings)
+	if len(warnings) != 0 {
+		t.Fatalf("a single session has no repetition interval constraint: %+v", warnings)
 	}
 	warnings = courseWarnings([]patientPlan{testCoursePlan(7, 2, "high", "p")}, procedures)
 	if len(warnings) != 2 {

@@ -119,7 +119,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	if !decode(w, r, &input) {
 		return
 	}
-	admitted, validDate := parseISODate(input.Date)
+	_, validDate := parseISODate(input.Date)
 	from, validFrom := parseISODate(input.From)
 	to, validTo := parseISODate(input.To)
 	if !validDate || !validFrom || !validTo || input.PatientNumber < 1 || to.Before(from) || to.Sub(from) > 365*24*time.Hour {
@@ -153,8 +153,10 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not lock patient plan")
 		return
 	}
-	var stayDays int
-	err = tx.QueryRow(ctx, "SELECT stay_days FROM day_plan_patients WHERE schedule_date=$1 AND patient_number=$2", input.Date, input.PatientNumber).Scan(&stayDays)
+	var arrivalKey, departureKey string
+	err = tx.QueryRow(ctx, `SELECT COALESCE(to_char(arrival_date,'YYYY-MM-DD'),to_char(schedule_date,'YYYY-MM-DD')),
+		COALESCE(to_char(discharge_date,'YYYY-MM-DD'),to_char(schedule_date + stay_days - 1,'YYYY-MM-DD'))
+		FROM day_plan_patients WHERE schedule_date=$1 AND patient_number=$2`, input.Date, input.PatientNumber).Scan(&arrivalKey, &departureKey)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeError(w, 404, "patient is not in this treatment plan")
 		return
@@ -163,8 +165,10 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not load treatment period")
 		return
 	}
-	discharge := admitted.AddDate(0, 0, stayDays)
-	if calendarDayNumber(from) < calendarDayNumber(admitted) || calendarDayNumber(to) >= calendarDayNumber(discharge) {
+	arrival, _ := parseISODate(arrivalKey)
+	departure, _ := parseISODate(departureKey)
+	dischargeExclusive := departure.AddDate(0, 0, 1)
+	if from.Before(arrival) || to.After(departure) {
 		writeError(w, 422, "absence must be within the patient's treatment period")
 		return
 	}
@@ -236,7 +240,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	}
 	result.AffectedCount = len(move)
 
-	rows, err = tx.Query(ctx, "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,room FROM procedures")
+	rows, err = tx.Query(ctx, "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,default_session_count,room,COALESCE(default_prerequisite_id,'') FROM procedures")
 	if err != nil {
 		writeError(w, 500, "could not load procedures")
 		return
@@ -244,7 +248,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	procedureMap := map[string]procedure{}
 	for rows.Next() {
 		var p procedure
-		if err := rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.PreparationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount, &p.Room); err != nil {
+		if err := rows.Scan(&p.ID, &p.Name, &p.DurationMinutes, &p.PreparationMinutes, &p.IsRelaxing, &p.MinIntervalDays, &p.DefaultWeeklyCount, &p.DefaultSessionCount, &p.Room, &p.DefaultPrerequisiteID); err != nil {
 			rows.Close()
 			writeError(w, 500, "could not load procedures")
 			return
@@ -257,6 +261,11 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows.Close()
+	courseRules, err := loadCourseRules(ctx, tx, input.Date, input.PatientNumber)
+	if err != nil {
+		writeError(w, 500, "could not load patient course rules")
+		return
+	}
 	workHours, err := loadSettings(ctx, tx)
 	if err != nil {
 		writeError(w, 500, "could not load organization hours")
@@ -268,7 +277,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 	occupied := []timeSlot{}
 	rows, err = tx.Query(ctx, `SELECT start_at,end_at,patient_number,COALESCE(source_procedure_id,''),COALESCE(to_char(source_plan_date,'YYYY-MM-DD'),''),room
 		FROM appointments WHERE status='scheduled' AND start_at >= $1 AND start_at < $2
-		AND (patient_number IS NULL OR (patient_number=$3 AND (source_plan_date=$4 OR source_plan_date IS NULL)) OR room<>'')`, admitted, discharge, input.PatientNumber, input.Date)
+		AND (patient_number IS NULL OR (patient_number=$3 AND (source_plan_date=$4 OR source_plan_date IS NULL)) OR room<>'')`, arrival, dischargeExclusive, input.PatientNumber, input.Date)
 	if err != nil {
 		writeError(w, 500, "could not load occupied slots")
 		return
@@ -330,13 +339,15 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 			first = now
 		}
 		placed := false
-		for day := time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.Local); calendarDayNumber(day) < calendarDayNumber(discharge); day = day.AddDate(0, 0, 1) {
+		for day := time.Date(first.Year(), first.Month(), first.Day(), 0, 0, 0, 0, time.Local); !day.After(departure); day = day.AddDate(0, 0, 1) {
 			if dayAbsences[input.PatientNumber][day.Format("2006-01-02")] {
 				continue
 			}
 			validInterval := true
+			previousDays := []time.Time{}
 			for _, slot := range occupied {
 				if slot.patient != nil && *slot.patient == input.PatientNumber && slot.sourcePlanDate == input.Date && slot.procedureID == previous.procedureID {
+					previousDays = append(previousDays, slot.start)
 					delta := calendarDayNumber(day) - calendarDayNumber(slot.start)
 					if delta < int64(p.MinIntervalDays) && delta > -int64(p.MinIntervalDays) {
 						validInterval = false
@@ -344,7 +355,7 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 					}
 				}
 			}
-			if !validInterval {
+			if !validInterval || !courseWeeklyAllowed(day, previousDays, p.DefaultWeeklyCount) {
 				continue
 			}
 			dayOccupied := []timeSlot{}
@@ -381,6 +392,27 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 			result.UnscheduledCount++
 			result.Warnings = append(result.Warnings, fmt.Sprintf("Не удалось перенести процедуру «%s» до окончания курса.", p.Name))
 		}
+	}
+	// Relocating sessions separately can split a required relaxation/therapy
+	// pair. Validate the final preview before saving either appointment.
+	finalSessions := []courseSession{}
+	movedIDs := map[string]bool{}
+	for _, original := range move {
+		movedIDs[original.id] = true
+	}
+	for _, existing := range treatments {
+		if !movedIDs[existing.id] {
+			finalSessions = append(finalSessions, courseSession{id: existing.id, procedureID: existing.procedureID, start: existing.start, end: existing.end})
+		}
+	}
+	for _, scheduled := range result.Appointments {
+		begin, _ := time.ParseInLocation("2006-01-02T15:04", scheduled.StartAt, time.Local)
+		finish, _ := time.ParseInLocation("2006-01-02T15:04", scheduled.EndAt, time.Local)
+		finalSessions = append(finalSessions, courseSession{id: scheduled.ID, procedureID: scheduled.ProcedureID, start: begin, end: finish})
+	}
+	if err := validateCourseSessions(input.PatientNumber, courseRules, finalSessions); err != nil {
+		result.UnscheduledCount++
+		result.Warnings = append(result.Warnings, err.Error())
 	}
 	result.RescheduledCount = len(result.Appointments)
 	result.ScheduledCount = result.RescheduledCount

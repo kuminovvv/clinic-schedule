@@ -61,8 +61,9 @@ def solve(data: dict) -> dict:
 
     model = cp_model.CpModel()
     week = workdays(data)
-    max_days = max(p["stayDays"] for p in plans)
+    max_days = max(p.get("startOffset", 0) + p["stayDays"] for p in plans)
     days = [first_date + timedelta(days=d) for d in range(max_days)]
+    course_key = data.get("courseKey", data["startDate"])
 
     # An occupied slot without a patient ID blocks all patients; otherwise the
     # existing appointment only blocks that patient (same semantics as Go).
@@ -90,14 +91,15 @@ def solve(data: dict) -> dict:
                           for slot in existing
                           if slot.get("patientNumber") == patient
                           and slot.get("procedureId") == proc_id
-                          and slot.get("sourcePlanDate", "") in ("", data["startDate"])]
+                          and slot.get("sourcePlanDate", "") in ("", course_key)]
             previous = None
             for repeat in range(requested):
                 key = f"p{patient}_{proc_id}_{repeat}"
                 present = model.new_bool_var(f"present_{key}")
-                day_var = model.new_int_var(0, plan["stayDays"] - 1, f"date_{key}")
+                day_var = model.new_int_var(0, max_days - 1, f"date_{key}")
                 choices = []
-                for d in range(plan["stayDays"]):
+                first_offset = plan.get("startOffset", 0)
+                for d in range(first_offset, first_offset + plan["stayDays"]):
                     day = days[d]
                     day_str = day.isoformat()
                     if absences.get(str(patient), {}).get(day_str, False):
@@ -111,7 +113,7 @@ def solve(data: dict) -> dict:
                     blocks = [(clock(b["start"]), clock(b["end"])) for b in working.get("breaks", [])]
                     for slot in occupied_by_day[day_str]:
                         same_room = bool(proc.get("room", "").strip()) and (slot.get("room", "").strip().casefold() == proc.get("room", "").strip().casefold())
-                        same_admission = slot.get("patientNumber") == patient and slot.get("sourcePlanDate", "") in ("", data["startDate"])
+                        same_admission = slot.get("patientNumber") == patient and slot.get("sourcePlanDate", "") in ("", course_key)
                         if slot.get("patientNumber") is None or same_admission or same_room:
                             t_start = datetime.fromisoformat(slot["startAt"])
                             t_end = datetime.fromisoformat(slot["endAt"])
@@ -149,12 +151,32 @@ def solve(data: dict) -> dict:
             # The catalog's weekly frequency is an upper bound, not a demand
             # to create additional sessions. Check every rolling seven-day span.
             weekly_limit = proc.get("defaultWeeklyCount", 7) or 7
-            for offset in range(plan["stayDays"]):
+            for offset in range(plan.get("startOffset", 0), plan.get("startOffset", 0) + plan["stayDays"]):
                 fixed_in_window = sum(offset <= (fixed - first_date).days < offset + 7 for fixed in fixed_days)
                 relevant = [i["take"] for i in per_procedure[patient, proc_id]
                             if offset <= i["day"] < offset + 7]
                 if relevant:
                     model.add(sum(relevant) <= max(0, weekly_limit - fixed_in_window))
+
+        if plan["severity"] == "high":
+            prerequisite_witnesses: dict[tuple[str, int], list] = defaultdict(list)
+            for target_id, prerequisite_id in plan.get("procedurePrerequisites", {}).items():
+                relaxing = per_procedure[patient, prerequisite_id]
+                for target in per_procedure[patient, target_id]:
+                    witnesses = []
+                    for prerequisite in relaxing:
+                        if prerequisite["day"] != target["day"]:
+                            continue
+                        witness = model.new_bool_var(
+                            f"prerequisite_{patient}_{target_id}_{target['repeat']}_{prerequisite['repeat']}_{target['day']}")
+                        model.add(witness <= target["take"])
+                        model.add(witness <= prerequisite["take"])
+                        model.add(prerequisite["begin"] + prerequisite["duration"] <= target["begin"]).only_enforce_if(witness)
+                        witnesses.append(witness)
+                        prerequisite_witnesses[prerequisite_id, prerequisite["repeat"]].append(witness)
+                    model.add(sum(witnesses) >= target["take"])
+            for witnesses in prerequisite_witnesses.values():
+                model.add(sum(witnesses) <= 1)
 
     # A schedule can be partially feasible. Maximize scheduled sessions first;
     # otherwise we'd get an empty but pleasantly balanced calendar.
@@ -162,7 +184,8 @@ def solve(data: dict) -> dict:
     patient_gaps = []
     for plan in plans:
         patient = plan["patientNumber"]
-        for d in range(plan["stayDays"]):
+        first_offset = plan.get("startOffset", 0)
+        for d in range(first_offset, first_offset + plan["stayDays"]):
             entries = per_patient_day[patient, d]
             if not entries:
                 continue

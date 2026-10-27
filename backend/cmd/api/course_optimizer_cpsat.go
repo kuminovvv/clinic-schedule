@@ -24,6 +24,7 @@ type optimizerBusySlot struct {
 
 type optimizerPayload struct {
 	StartDate  string                  `json:"startDate"`
+	CourseKey  string                  `json:"courseKey"`
 	Plans      []patientPlan           `json:"plans"`
 	Procedures map[string]procedure    `json:"procedures"`
 	Settings   settings                `json:"settings"`
@@ -46,7 +47,16 @@ type optimizerResult struct {
 // Missing Python/OR-Tools or solver errors fail explicitly, never silently
 // changing the schedule or falling back to a different optimizer.
 func createCourseScheduleCP(ctx context.Context, day time.Time, plans []patientPlan, procedures map[string]procedure, configuration settings, occupied []timeSlot, absences map[int]map[string]bool) (scheduleResponse, error) {
-	input := optimizerPayload{StartDate: day.Format("2006-01-02"), Plans: plans, Procedures: procedures, Settings: configuration, Absences: absences}
+	for _, plan := range plans {
+		if err := validateCoursePrerequisites(plan, procedures); err != nil {
+			return scheduleResponse{}, err
+		}
+	}
+	courseKey := day.Format("2006-01-02")
+	if len(plans) > 0 && plans[0].CourseKey != "" {
+		courseKey = plans[0].CourseKey
+	}
+	input := optimizerPayload{StartDate: day.Format("2006-01-02"), CourseKey: courseKey, Plans: plans, Procedures: procedures, Settings: configuration, Absences: absences}
 	for _, slot := range occupied {
 		input.Occupied = append(input.Occupied, optimizerBusySlot{
 			StartAt: slot.start.Format("2006-01-02T15:04"), EndAt: slot.end.Format("2006-01-02T15:04"),
@@ -93,6 +103,10 @@ func createCourseScheduleCP(ctx context.Context, day time.Time, plans []patientP
 // saving anything, so a malformed response can never bypass clinic rules.
 func validateOptimizedSchedule(day time.Time, plans []patientPlan, procedures map[string]procedure, configuration settings, occupied []timeSlot, absences map[int]map[string]bool, slots []optimizedSlot) (scheduleResponse, error) {
 	result := scheduleResponse{Appointments: []appointment{}, UnscheduledPatients: []int{}}
+	courseKey := day.Format("2006-01-02")
+	if len(plans) > 0 && plans[0].CourseKey != "" {
+		courseKey = plans[0].CourseKey
+	}
 	byPatient := map[int]patientPlan{}
 	remaining := map[int]map[string]int{}
 	for _, plan := range plans {
@@ -117,18 +131,26 @@ func validateOptimizedSchedule(day time.Time, plans []patientPlan, procedures ma
 		if step <= 0 {
 			step = 10
 		}
+		arrival, validArrival := parseISODate(plan.ArrivalDate)
+		departure, validDeparture := parseISODate(plan.DepartureDate)
+		if !validArrival {
+			arrival = day.AddDate(0, 0, plan.StartOffset)
+		}
+		if !validDeparture {
+			departure = arrival.AddDate(0, 0, plan.StayDays-1)
+		}
 		if err1 != nil || err2 != nil || end.Sub(start) != time.Duration(p.DurationMinutes+p.PreparationMinutes)*time.Minute ||
-			calendarDayNumber(start) < calendarDayNumber(day) || calendarDayNumber(start)-calendarDayNumber(day) >= int64(plan.StayDays) ||
+			calendarDayNumber(start) < calendarDayNumber(arrival) || calendarDayNumber(start) > calendarDayNumber(departure) ||
 			!configuration.allowsAppointment(start, end) || (start.Hour()*60+start.Minute()-workStartMinutes)%step != 0 ||
 			absences[item.PatientNumber][start.Format("2006-01-02")] {
 			return scheduleResponse{}, fmt.Errorf("optimizer returned a session outside working hours or stay")
 		}
 		for _, previous := range occupied {
-			if (previous.patient == nil || (*previous.patient == item.PatientNumber && (previous.sourcePlanDate == "" || previous.sourcePlanDate == day.Format("2006-01-02"))) || sameRoom(previous.room, p.Room)) && start.Before(previous.end) && end.After(previous.start) {
+			if (previous.patient == nil || (*previous.patient == item.PatientNumber && (previous.sourcePlanDate == "" || previous.sourcePlanDate == courseKey)) || sameRoom(previous.room, p.Room)) && start.Before(previous.end) && end.After(previous.start) {
 				return scheduleResponse{}, fmt.Errorf("optimizer overlaps an existing appointment")
 			}
 			if previous.patient != nil && *previous.patient == item.PatientNumber && previous.procedureID == item.ProcedureID &&
-				(previous.sourcePlanDate == "" || previous.sourcePlanDate == day.Format("2006-01-02")) &&
+				(previous.sourcePlanDate == "" || previous.sourcePlanDate == courseKey) &&
 				abs64(calendarDayNumber(previous.start)-calendarDayNumber(start)) < int64(p.MinIntervalDays) {
 				return scheduleResponse{}, fmt.Errorf("optimizer violates spacing with an existing session")
 			}
@@ -168,26 +190,49 @@ func validateOptimizedSchedule(day time.Time, plans []patientPlan, procedures ma
 	// A fixed manually edited session counts toward weekly capacity, but even
 	// previously exceeded limits should not prevent an unrelated partial course.
 	for _, plan := range plans {
+		if plan.Severity == "high" {
+			usedPrerequisites := map[int]bool{}
+			for targetID, prerequisiteID := range plan.ProcedurePrerequisites {
+				for _, target := range result.Appointments {
+					if target.PatientNumber == nil || *target.PatientNumber != plan.PatientNumber || target.ProcedureID != targetID {
+						continue
+					}
+					found := false
+					for index, prerequisite := range result.Appointments {
+						if !usedPrerequisites[index] && prerequisite.PatientNumber != nil && *prerequisite.PatientNumber == plan.PatientNumber && prerequisite.ProcedureID == prerequisiteID &&
+							prerequisite.StartAt[:10] == target.StartAt[:10] && prerequisite.EndAt <= target.StartAt {
+							found = true
+							usedPrerequisites[index] = true
+							break
+						}
+					}
+					if !found {
+						return scheduleResponse{}, fmt.Errorf("optimizer omitted a required relaxing session before %q", procedures[targetID].Name)
+					}
+				}
+			}
+		}
 		for _, id := range plan.ProcedureIDs {
 			limit := procedures[id].DefaultWeeklyCount
 			if limit <= 0 {
 				limit = 7
 			}
 			for offset := 0; offset < plan.StayDays; offset++ {
+				windowOffset := plan.StartOffset + offset
 				fixed, generated := 0, 0
 				for _, old := range occupied {
 					if old.patient == nil || *old.patient != plan.PatientNumber || old.procedureID != id ||
-						(old.sourcePlanDate != "" && old.sourcePlanDate != day.Format("2006-01-02")) {
+						(old.sourcePlanDate != "" && old.sourcePlanDate != courseKey) {
 						continue
 					}
 					delta := calendarDayNumber(old.start) - calendarDayNumber(day)
-					if int64(offset) <= delta && delta < int64(offset+7) {
+					if int64(windowOffset) <= delta && delta < int64(windowOffset+7) {
 						fixed++
 					}
 				}
 				for _, scheduled := range allocated[plan.PatientNumber][id] {
 					delta := calendarDayNumber(scheduled) - calendarDayNumber(day)
-					if int64(offset) <= delta && delta < int64(offset+7) {
+					if int64(windowOffset) <= delta && delta < int64(windowOffset+7) {
 						generated++
 					}
 				}

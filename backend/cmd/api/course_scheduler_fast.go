@@ -30,6 +30,9 @@ type fastCourseProcedure struct {
 func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures map[string]procedure, config settings, occupied []timeSlot, absences map[int]map[string]bool) (scheduleResponse, error) {
 	result := scheduleResponse{Appointments: []appointment{}, UnscheduledPatients: []int{}}
 	planKey := start.Format("2006-01-02")
+	if len(plans) > 0 && plans[0].CourseKey != "" {
+		planKey = plans[0].CourseKey
+	}
 	step := config.TimeStepMinutes
 	if step <= 0 {
 		step = 10
@@ -49,8 +52,11 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 		if plan.StayDays < 1 || plan.StayDays > 365 {
 			return result, errInvalidTask
 		}
-		if plan.StayDays > maxDays {
-			maxDays = plan.StayDays
+		if err := validateCoursePrerequisites(plan, procedures); err != nil {
+			return result, err
+		}
+		if plan.StartOffset+plan.StayDays > maxDays {
+			maxDays = plan.StartOffset + plan.StayDays
 		}
 	}
 	baseDays := make([]fastCourseDay, maxDays)
@@ -77,7 +83,7 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 		patient := plan.PatientNumber
 		fixed := map[string][]int{}
 		days := make([]fastCourseDay, plan.StayDays)
-		copy(days, baseDays[:plan.StayDays])
+		copy(days, baseDays[plan.StartOffset:plan.StartOffset+plan.StayDays])
 		for offset := range days {
 			item := &days[offset]
 			if absences[patient][item.day.Format("2006-01-02")] {
@@ -97,7 +103,7 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 				outsidePatient := 0
 				slot.patient = &outsidePatient
 			}
-			index := int(calendarDayNumber(slot.start) - calendarDayNumber(start))
+			index := int(calendarDayNumber(slot.start)-calendarDayNumber(start)) - plan.StartOffset
 			if index >= 0 && index < len(days) {
 				days[index].occupied = append(days[index].occupied, slot)
 			}
@@ -123,10 +129,29 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 			}
 			assigned = append(assigned, fastCourseProcedure{id: id, count: count, procedure: p})
 		}
+		requiredPrerequisites := map[string]bool{}
+		requiredPrerequisiteCounts := map[string]int{}
+		for _, prerequisiteID := range plan.ProcedurePrerequisites {
+			requiredPrerequisites[prerequisiteID] = true
+		}
+		if plan.Severity == "high" {
+			for targetID, prerequisiteID := range plan.ProcedurePrerequisites {
+				requiredPrerequisiteCounts[prerequisiteID] += plan.ProcedureCounts[targetID]
+			}
+		}
 		// The least flexible procedures go first, so optional procedures
 		// cannot consume the few possible dates of a tightly constrained one.
+		// Required target/prerequisite bundles precede surplus relaxing sessions.
 		sort.SliceStable(assigned, func(i, j int) bool {
 			a, b := assigned[i], assigned[j]
+			aIsPairedTarget := plan.Severity == "high" && plan.ProcedurePrerequisites[a.id] != ""
+			bIsPairedTarget := plan.Severity == "high" && plan.ProcedurePrerequisites[b.id] != ""
+			if aIsPairedTarget != bIsPairedTarget {
+				return aIsPairedTarget
+			}
+			if requiredPrerequisites[a.id] != requiredPrerequisites[b.id] {
+				return requiredPrerequisites[a.id]
+			}
 			if a.count*a.procedure.MinIntervalDays != b.count*b.procedure.MinIntervalDays {
 				return a.count*a.procedure.MinIntervalDays > b.count*b.procedure.MinIntervalDays
 			}
@@ -142,6 +167,12 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 				weeklyLimit = 7
 			}
 			for repeat := 0; repeat < item.count; repeat++ {
+				// Required relaxation sessions are placed together with their
+				// target below, so a relaxation cannot be stranded on an unusable day.
+				if repeat < requiredPrerequisiteCounts[item.id] {
+					continue
+				}
+				placedBefore := len(placed[item.id])
 				remaining := item.count - repeat - 1
 				last := -item.procedure.MinIntervalDays
 				if n := len(placed[item.id]); n > 0 {
@@ -167,11 +198,24 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 					future bool
 				}
 				options := make([]candidate, 0, len(freeDays))
+				pairedPrerequisiteID := ""
+				if plan.Severity == "high" {
+					pairedPrerequisiteID = plan.ProcedurePrerequisites[item.id]
+				}
 				for _, index := range freeDays {
 					if index < last+item.procedure.MinIntervalDays {
 						continue
 					}
 					ok := true
+					for _, previous := range placed[item.id] {
+						if absInt(index-previous) < item.procedure.MinIntervalDays {
+							ok = false
+							break
+						}
+					}
+					if !ok {
+						continue
+					}
 					for _, f := range fixed[item.id] {
 						if absInt(index-f) < item.procedure.MinIntervalDays {
 							ok = false
@@ -181,6 +225,27 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 					if !ok || !fastWeeklyAllowed(index, append(fixed[item.id], placed[item.id]...), weeklyLimit) {
 						continue
 					}
+					candidateTasks := append([]scheduleTask(nil), tasks[index]...)
+					if pairedPrerequisiteID != "" {
+						prerequisite := procedures[pairedPrerequisiteID]
+						prerequisiteDays := append(append([]int(nil), fixed[pairedPrerequisiteID]...), placed[pairedPrerequisiteID]...)
+						validPrerequisiteDay := true
+						for _, previous := range prerequisiteDays {
+							if absInt(index-previous) < prerequisite.MinIntervalDays {
+								validPrerequisiteDay = false
+								break
+							}
+						}
+						prerequisiteWeeklyLimit := prerequisite.DefaultWeeklyCount
+						if prerequisiteWeeklyLimit <= 0 {
+							prerequisiteWeeklyLimit = 7
+						}
+						if !validPrerequisiteDay || !fastWeeklyAllowed(index, prerequisiteDays, prerequisiteWeeklyLimit) {
+							continue
+						}
+						candidateTasks = append(candidateTasks, scheduleTask{PatientNumber: patient, ProcedureID: pairedPrerequisiteID, Severity: plan.Severity})
+					}
+					candidateTasks = append(candidateTasks, scheduleTask{PatientNumber: patient, ProcedureID: item.id, Severity: plan.Severity})
 					future := fastCanFitRemaining(index, remaining, freeDays, fixed[item.id],
 						placed[item.id], item.procedure.MinIntervalDays, weeklyLimit)
 					// Strongly prioritize spreading the number of treatments by
@@ -199,7 +264,11 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 				})
 				for _, option := range options {
 					index := option.offset
-					candidateTasks := append(append([]scheduleTask(nil), tasks[index]...), scheduleTask{PatientNumber: patient, ProcedureID: item.id, Severity: plan.Severity})
+					candidateTasks := append([]scheduleTask(nil), tasks[index]...)
+					if pairedPrerequisiteID != "" {
+						candidateTasks = append(candidateTasks, scheduleTask{PatientNumber: patient, ProcedureID: pairedPrerequisiteID, Severity: plan.Severity})
+					}
+					candidateTasks = append(candidateTasks, scheduleTask{PatientNumber: patient, ProcedureID: item.id, Severity: plan.Severity})
 					orderedTasks := fastOrderedTasks(candidateTasks, procedures, plan.Severity)
 					candidateSlots := make([]scheduledTask, 0, len(orderedTasks))
 					for _, task := range orderedTasks {
@@ -211,12 +280,18 @@ func createCourseScheduleFast(start time.Time, plans []patientPlan, procedures m
 					}
 					tasks[index] = candidateTasks
 					placed[item.id] = append(placed[item.id], index)
-					used[index]++
+					if pairedPrerequisiteID != "" {
+						placed[pairedPrerequisiteID] = append(placed[pairedPrerequisiteID], index)
+					}
+					used[index] += 1
+					if pairedPrerequisiteID != "" {
+						used[index]++
+					}
 					break
 				}
 				// When a course is impossible, report the unplaced suffix rather
 				// than ignoring the limit or forging an appointment.
-				if len(placed[item.id]) != repeat+1 {
+				if len(placed[item.id]) != placedBefore+1 {
 					break
 				}
 			}
