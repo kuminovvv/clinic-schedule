@@ -41,7 +41,7 @@ function DatePicker({dateKey, ariaLabel, disabled = false, minDateKey, maxDateKe
 
   return (
     <Popover onOpenChange={setOpen} open={open}>
-      <PopoverTrigger render={<Button aria-label={ariaLabel} className={cn("h-10 w-full justify-between rounded-xl bg-white px-3 text-left font-normal", className)} disabled={disabled} type="button" variant="outline"/>}>
+      <PopoverTrigger render={<Button aria-label={ariaLabel} className={cn("h-10 w-full justify-between rounded-xl bg-background px-3 text-left font-normal", className)} disabled={disabled} type="button" variant="outline"/>}>
         <span>{selectedDate ? dateFormatter.format(selectedDate) : dateKey}</span>
         <Calendar03StrokeRoundedIcon className="size-4 text-slate-500"/>
       </PopoverTrigger>
