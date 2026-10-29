@@ -17,7 +17,7 @@ func TestProcedureDefaultSessionCountIntegration(t *testing.T) {
 	save := func(payload string) *httptest.ResponseRecorder {
 		t.Helper()
 		response := httptest.NewRecorder()
-		api.saveProcedures(response, httptest.NewRequest(http.MethodPut, "/v1/procedures", bytes.NewBufferString(payload)))
+		api.saveProcedures(response, catalogMutationRequest(t, api, http.MethodPut, "/v1/procedures", bytes.NewBufferString(payload)))
 		return response
 	}
 	load := func(id string) procedure {

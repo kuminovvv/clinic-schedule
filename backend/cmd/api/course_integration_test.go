@@ -55,7 +55,11 @@ func TestCoursePersistenceIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		r := httptest.NewRecorder()
-		handle(r, httptest.NewRequest(method, path, bytes.NewReader(encoded)))
+		request := httptest.NewRequest(method, path, bytes.NewReader(encoded))
+		if path == "/v1/procedures" {
+			request = catalogMutationRequest(t, api, method, path, bytes.NewReader(encoded))
+		}
+		handle(r, request)
 		return r
 	}
 	procedures := []procedure{
@@ -189,6 +193,9 @@ func TestOptimizersPersistCalendarCards(t *testing.T) {
 			t.Fatal(err)
 		}
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		if path == "/v1/procedures" {
+			req = catalogMutationRequest(t, api, method, path, bytes.NewReader(body))
+		}
 		response := httptest.NewRecorder()
 		handler(response, req)
 		return response
@@ -233,7 +240,11 @@ func TestFastOptimizerPersistsThreeThousandAppointments(t *testing.T) {
 			t.Fatal(err)
 		}
 		recorder := httptest.NewRecorder()
-		handle(recorder, httptest.NewRequest(method, path, bytes.NewReader(body)))
+		request := httptest.NewRequest(method, path, bytes.NewReader(body))
+		if path == "/v1/procedures" {
+			request = catalogMutationRequest(t, api, method, path, bytes.NewReader(body))
+		}
+		handle(recorder, request)
 		return recorder
 	}
 	date := "2099-01-05"

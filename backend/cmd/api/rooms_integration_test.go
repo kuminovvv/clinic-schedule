@@ -21,6 +21,9 @@ func TestOptionalRoomCatalogGenerationAndManualConflicts(t *testing.T) {
 		}
 		res := httptest.NewRecorder()
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		if path == "/v1/procedures" {
+			req = catalogMutationRequest(t, api, method, path, bytes.NewReader(body))
+		}
 		if method == http.MethodPut && len(path) > len("/v1/appointments/") && path[:len("/v1/appointments/")] == "/v1/appointments/" {
 			req.SetPathValue("id", path[len("/v1/appointments/"):])
 		}

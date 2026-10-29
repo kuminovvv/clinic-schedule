@@ -78,6 +78,9 @@ func TestScheduleRegenerationPreservesManualChangesAndRollsBackOnClosures(t *tes
 			t.Fatal(err)
 		}
 		req := httptest.NewRequest(method, path, bytes.NewReader(body))
+		if path == "/v1/procedures" {
+			req = catalogMutationRequest(t, api, method, path, bytes.NewReader(body))
+		}
 		response := httptest.NewRecorder()
 		handler(response, req)
 		return response

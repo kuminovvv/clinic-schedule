@@ -24,13 +24,25 @@ func courseRulesRequest(t *testing.T, handler func(http.ResponseWriter, *http.Re
 	return recorder
 }
 
+func courseRulesCatalogSave(t *testing.T, api *server, value any) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := catalogMutationRequest(t, api, http.MethodPut, "/v1/procedures", bytes.NewReader(body))
+	response := httptest.NewRecorder()
+	api.saveProcedures(response, request)
+	return response
+}
+
 func createPairedPatientForTest(t *testing.T, api *server, day string, stay int) []appointment {
 	t.Helper()
 	procedures := []procedure{
 		{ID: "paired-relax", Name: "Relax", DurationMinutes: 40, IsRelaxing: true, MinIntervalDays: 1, DefaultWeeklyCount: 7},
 		{ID: "paired-target", Name: "Complex", DurationMinutes: 40, MinIntervalDays: 1, DefaultWeeklyCount: 7},
 	}
-	if got := courseRulesRequest(t, api.saveProcedures, "PUT", "/v1/procedures", "", procedures); got.Code != 200 {
+	if got := courseRulesCatalogSave(t, api, procedures); got.Code != 200 {
 		t.Fatalf("save procedures: %d %s", got.Code, got.Body.String())
 	}
 	plan := dayPlan{Date: day, Plans: []patientPlan{{
@@ -105,7 +117,7 @@ func TestManualMoveRespectsRollingWeeklyCourseLimitIntegration(t *testing.T) {
 	api := &server{db: db}
 	day := "2099-01-05"
 	p := []procedure{{ID: "weekly-relax", Name: "Relax", DurationMinutes: 40, MinIntervalDays: 1, DefaultWeeklyCount: 1, IsRelaxing: true}}
-	if r := courseRulesRequest(t, api.saveProcedures, "PUT", "/v1/procedures", "", p); r.Code != 200 {
+	if r := courseRulesCatalogSave(t, api, p); r.Code != 200 {
 		t.Fatalf("save: %d %s", r.Code, r.Body.String())
 	}
 	plan := dayPlan{Date: day, Plans: []patientPlan{{PatientNumber: 1, Severity: "high", StayDays: 9, ProcedureIDs: []string{"weekly-relax"}, ProcedureCounts: map[string]int{"weekly-relax": 2}}}}

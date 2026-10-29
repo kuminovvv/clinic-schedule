@@ -101,6 +101,9 @@ func testAbsencePatient(t *testing.T, api *server, date string, stayDays, sessio
 }
 
 func TestAbsencePreviewAndAtomicTargetedRelocationIntegration(t *testing.T) {
+	previousZone := time.Local
+	time.Local = time.FixedZone("Clinic UTC+6", 6*60*60)
+	t.Cleanup(func() { time.Local = previousZone })
 	db := isolatedScheduleDatabase(t)
 	api := &server{db: db}
 	ctx := context.Background()
@@ -254,7 +257,7 @@ func TestProcedureDurationPersistsAsTherapyAndPreparationIntegration(t *testing.
 	items := []procedure{{ID: "duration-test", Name: "Therapy", DurationMinutes: 30, PreparationMinutes: 20, MinIntervalDays: 1, DefaultWeeklyCount: 1}}
 	encoded, _ := json.Marshal(items)
 	r := httptest.NewRecorder()
-	api.saveProcedures(r, httptest.NewRequest(http.MethodPut, "/v1/procedures", bytes.NewReader(encoded)))
+	api.saveProcedures(r, catalogMutationRequest(t, api, http.MethodPut, "/v1/procedures", bytes.NewReader(encoded)))
 	if r.Code != 200 {
 		t.Fatalf("save therapy and preparation: %d %s", r.Code, r.Body.String())
 	}
@@ -266,7 +269,7 @@ func TestProcedureDurationPersistsAsTherapyAndPreparationIntegration(t *testing.
 	items[0].PreparationMinutes = 20
 	encoded, _ = json.Marshal(items)
 	r = httptest.NewRecorder()
-	api.saveProcedures(r, httptest.NewRequest(http.MethodPut, "/v1/procedures", bytes.NewReader(encoded)))
+	api.saveProcedures(r, catalogMutationRequest(t, api, http.MethodPut, "/v1/procedures", bytes.NewReader(encoded)))
 	if r.Code != 400 {
 		t.Fatalf("total reservation longer than 420 minutes must be rejected: %d %s", r.Code, r.Body.String())
 	}

@@ -24,13 +24,13 @@ func TestProcedureCatalogPrerequisitesIntegration(t *testing.T) {
 			t.Fatal(err)
 		}
 		response := httptest.NewRecorder()
-		api.saveProcedures(response, httptest.NewRequest(http.MethodPut, "/v1/procedures", bytes.NewReader(data)))
+		api.saveProcedures(response, catalogMutationRequest(t, api, http.MethodPut, "/v1/procedures", bytes.NewReader(data)))
 		return response
 	}
 	saveRaw := func(payload string) *httptest.ResponseRecorder {
 		t.Helper()
 		response := httptest.NewRecorder()
-		api.saveProcedures(response, httptest.NewRequest(http.MethodPut, "/v1/procedures", strings.NewReader(payload)))
+		api.saveProcedures(response, catalogMutationRequest(t, api, http.MethodPut, "/v1/procedures", strings.NewReader(payload)))
 		return response
 	}
 	get := func(id string) procedure {
@@ -54,7 +54,7 @@ func TestProcedureCatalogPrerequisitesIntegration(t *testing.T) {
 	}
 	remove := func(id string) *httptest.ResponseRecorder {
 		t.Helper()
-		req := httptest.NewRequest(http.MethodDelete, "/v1/procedures/"+id, nil)
+		req := catalogMutationRequest(t, api, http.MethodDelete, "/v1/procedures/"+id, nil)
 		req.SetPathValue("id", id)
 		response := httptest.NewRecorder()
 		api.deleteProcedure(response, req)

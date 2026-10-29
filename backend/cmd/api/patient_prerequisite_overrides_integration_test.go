@@ -33,7 +33,7 @@ func TestPatientPrerequisiteOverridesIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	api.saveProcedures(response, httptest.NewRequest(http.MethodPut, "/v1/procedures", bytes.NewReader(data)))
+	api.saveProcedures(response, catalogMutationRequest(t, api, http.MethodPut, "/v1/procedures", bytes.NewReader(data)))
 	if response.Code != http.StatusOK {
 		t.Fatalf("save catalog: %d %s", response.Code, response.Body.String())
 	}
