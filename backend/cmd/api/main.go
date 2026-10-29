@@ -8,6 +8,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	_ "time/tzdata"
@@ -35,6 +36,7 @@ type appointment struct {
 
 type procedure struct {
 	ID                    string `json:"id"`
+	Position              int    `json:"position,omitempty"`
 	Name                  string `json:"name"`
 	DurationMinutes       int    `json:"durationMinutes"`
 	PreparationMinutes    int    `json:"preparationMinutes"`
@@ -267,20 +269,34 @@ func migrate(ctx context.Context, db *pgxpool.Pool) error {
 }
 
 func seedProcedures(ctx context.Context, db *pgxpool.Pool) error {
-	var count int
-	if err := db.QueryRow(ctx, "SELECT count(*) FROM procedures").Scan(&count); err != nil {
+	tx, err := db.Begin(ctx)
+	if err != nil {
 		return err
 	}
-	if count != 0 {
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, "LOCK TABLE procedures IN SHARE ROW EXCLUSIVE MODE"); err != nil {
+		return err
+	}
+	var count int
+	var revision int64
+	if err := tx.QueryRow(ctx, "SELECT (SELECT count(*) FROM procedures), revision FROM procedure_catalog_revision WHERE id=1").Scan(&count, &revision); err != nil {
+		return err
+	}
+	// An empty catalog with a nonzero revision was intentionally edited.
+	// Seed only a fresh installation, never restore deleted procedures.
+	if count != 0 || revision != 0 {
 		return nil
 	}
 	for i := 1; i <= 20; i++ {
-		_, err := db.Exec(ctx, "INSERT INTO procedures (id, name, duration_minutes, preparation_minutes) VALUES ($1, $2, 30, 20) ON CONFLICT (id) DO NOTHING", fmt.Sprintf("procedure-%d", i), fmt.Sprintf("Процедура %d", i))
+		_, err := tx.Exec(ctx, "INSERT INTO procedures (id, name, duration_minutes, preparation_minutes, position) VALUES ($1, $2, 30, 20, $3) ON CONFLICT (id) DO NOTHING", fmt.Sprintf("procedure-%d", i), fmt.Sprintf("Процедура %d", i), i-1)
 		if err != nil {
 			return err
 		}
 	}
-	return nil
+	if _, err := tx.Exec(ctx, "UPDATE procedure_catalog_revision SET revision=revision+1 WHERE id=1"); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *server) health(w http.ResponseWriter, r *http.Request) {
@@ -557,26 +573,67 @@ func (s *server) clearSchedules(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) listProcedures(w http.ResponseWriter, r *http.Request) {
-	rows, err := s.db.Query(r.Context(), "SELECT id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,default_session_count,room,COALESCE(default_prerequisite_id,'') FROM procedures ORDER BY id")
+	tx, err := s.db.BeginTx(r.Context(), pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "could not load procedures")
 		return
 	}
-	defer rows.Close()
+	defer tx.Rollback(r.Context())
+	var revision int64
+	if err := tx.QueryRow(r.Context(), "SELECT revision FROM procedure_catalog_revision WHERE id=1").Scan(&revision); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load catalog revision")
+		return
+	}
+	rows, err := tx.Query(r.Context(), "SELECT id,position,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,default_session_count,room,COALESCE(default_prerequisite_id,'') FROM procedures ORDER BY position,id")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load procedures")
+		return
+	}
 	items := make([]procedure, 0)
 	for rows.Next() {
 		var item procedure
-		if err := rows.Scan(&item.ID, &item.Name, &item.DurationMinutes, &item.PreparationMinutes, &item.IsRelaxing, &item.MinIntervalDays, &item.DefaultWeeklyCount, &item.DefaultSessionCount, &item.Room, &item.DefaultPrerequisiteID); err != nil {
+		if err := rows.Scan(&item.ID, &item.Position, &item.Name, &item.DurationMinutes, &item.PreparationMinutes, &item.IsRelaxing, &item.MinIntervalDays, &item.DefaultWeeklyCount, &item.DefaultSessionCount, &item.Room, &item.DefaultPrerequisiteID); err != nil {
+			rows.Close()
 			writeError(w, http.StatusInternalServerError, "could not decode procedures")
 			return
 		}
 		items = append(items, item)
 	}
 	if rows.Err() != nil {
+		rows.Close()
 		writeError(w, http.StatusInternalServerError, "could not load procedures")
 		return
 	}
+	rows.Close()
+	if err := tx.Commit(r.Context()); err != nil {
+		writeError(w, http.StatusInternalServerError, "could not load procedures")
+		return
+	}
+	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", revision))
 	writeJSON(w, http.StatusOK, items)
+}
+
+var errCatalogRevisionChanged = errors.New("catalog revision changed")
+var errInvalidCatalogRevision = errors.New("invalid catalog revision")
+var errMissingCatalogRevision = errors.New("catalog revision is required")
+
+func catalogRevision(r *http.Request, tx pgx.Tx) (int64, error) {
+	var current int64
+	if err := tx.QueryRow(r.Context(), "SELECT revision FROM procedure_catalog_revision WHERE id=1 FOR UPDATE").Scan(&current); err != nil {
+		return 0, err
+	}
+	value := r.Header.Get("If-Match")
+	if value == "" {
+		return 0, errMissingCatalogRevision
+	}
+	expected, err := strconv.ParseInt(strings.Trim(value, "\""), 10, 64)
+	if err != nil || expected < 0 {
+		return 0, errInvalidCatalogRevision
+	}
+	if expected != current {
+		return 0, errCatalogRevisionChanged
+	}
+	return current, nil
 }
 
 func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
@@ -606,12 +663,26 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not save procedures")
 		return
 	}
+	currentRevision, err := catalogRevision(r, tx)
+	if err != nil {
+		if errors.Is(err, errCatalogRevisionChanged) {
+			writeError(w, http.StatusConflict, err.Error())
+		} else if errors.Is(err, errMissingCatalogRevision) {
+			writeError(w, http.StatusPreconditionRequired, err.Error())
+		} else if errors.Is(err, errInvalidCatalogRevision) {
+			writeError(w, http.StatusBadRequest, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "could not check catalog revision")
+		}
+		return
+	}
 	type prerequisiteRule struct {
-		isRelaxing     bool
-		prerequisiteID string
+		isRelaxing          bool
+		prerequisiteID      string
+		defaultSessionCount int
 	}
 	rules := make(map[string]prerequisiteRule)
-	rows, err := tx.Query(r.Context(), "SELECT id,is_relaxing,COALESCE(default_prerequisite_id,'') FROM procedures")
+	rows, err := tx.Query(r.Context(), "SELECT id,is_relaxing,COALESCE(default_prerequisite_id,''),default_session_count FROM procedures")
 	if err != nil {
 		writeError(w, 500, "could not load procedures")
 		return
@@ -619,7 +690,7 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var id string
 		var rule prerequisiteRule
-		if err := rows.Scan(&id, &rule.isRelaxing, &rule.prerequisiteID); err != nil {
+		if err := rows.Scan(&id, &rule.isRelaxing, &rule.prerequisiteID, &rule.defaultSessionCount); err != nil {
 			rows.Close()
 			writeError(w, 500, "could not load procedures")
 			return
@@ -636,7 +707,10 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 	seen := make(map[string]bool, len(payload))
 	for _, incoming := range payload {
 		item := incoming.procedure
-		item.DefaultSessionCount = 1
+		item.DefaultSessionCount = rules[item.ID].defaultSessionCount
+		if item.DefaultSessionCount == 0 {
+			item.DefaultSessionCount = 1
+		}
 		if incoming.DefaultSessionCount != nil {
 			var count *int
 			if err := json.Unmarshal(incoming.DefaultSessionCount, &count); err != nil || count == nil {
@@ -660,7 +734,7 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		seen[item.ID] = true
-		rules[item.ID] = prerequisiteRule{isRelaxing: item.IsRelaxing, prerequisiteID: item.DefaultPrerequisiteID}
+		rules[item.ID] = prerequisiteRule{isRelaxing: item.IsRelaxing, prerequisiteID: item.DefaultPrerequisiteID, defaultSessionCount: item.DefaultSessionCount}
 		items = append(items, item)
 	}
 	for id, rule := range rules {
@@ -673,10 +747,45 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	for _, item := range items {
-		_, err = tx.Exec(r.Context(), "INSERT INTO procedures (id,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,default_session_count,room,default_prerequisite_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name,duration_minutes=EXCLUDED.duration_minutes,preparation_minutes=EXCLUDED.preparation_minutes,is_relaxing=EXCLUDED.is_relaxing,min_interval_days=EXCLUDED.min_interval_days,default_weekly_count=EXCLUDED.default_weekly_count,default_session_count=EXCLUDED.default_session_count,room=EXCLUDED.room,default_prerequisite_id=EXCLUDED.default_prerequisite_id,updated_at=now()", item.ID, strings.TrimSpace(item.Name), item.DurationMinutes, item.PreparationMinutes, item.IsRelaxing, item.MinIntervalDays, item.DefaultWeeklyCount, item.DefaultSessionCount, strings.TrimSpace(item.Room), item.DefaultPrerequisiteID)
-		if err != nil {
+	batch := &pgx.Batch{}
+	for index, item := range items {
+		item.Position = index
+		items[index].Position = index
+		batch.Queue(`INSERT INTO procedures (id,position,name,duration_minutes,preparation_minutes,is_relaxing,min_interval_days,default_weekly_count,default_session_count,room,default_prerequisite_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''))
+			ON CONFLICT (id) DO UPDATE SET position=EXCLUDED.position,name=EXCLUDED.name,duration_minutes=EXCLUDED.duration_minutes,
+			preparation_minutes=EXCLUDED.preparation_minutes,is_relaxing=EXCLUDED.is_relaxing,min_interval_days=EXCLUDED.min_interval_days,
+			default_weekly_count=EXCLUDED.default_weekly_count,default_session_count=EXCLUDED.default_session_count,room=EXCLUDED.room,
+			default_prerequisite_id=EXCLUDED.default_prerequisite_id,updated_at=now()
+			WHERE (procedures.position,procedures.name,procedures.duration_minutes,procedures.preparation_minutes,
+				procedures.is_relaxing,procedures.min_interval_days,procedures.default_weekly_count,procedures.default_session_count,
+				procedures.room,procedures.default_prerequisite_id)
+			IS DISTINCT FROM
+				(EXCLUDED.position,EXCLUDED.name,EXCLUDED.duration_minutes,EXCLUDED.preparation_minutes,
+				EXCLUDED.is_relaxing,EXCLUDED.min_interval_days,EXCLUDED.default_weekly_count,EXCLUDED.default_session_count,
+				EXCLUDED.room,EXCLUDED.default_prerequisite_id)`, item.ID, item.Position, strings.TrimSpace(item.Name), item.DurationMinutes, item.PreparationMinutes, item.IsRelaxing, item.MinIntervalDays, item.DefaultWeeklyCount, item.DefaultSessionCount, strings.TrimSpace(item.Room), item.DefaultPrerequisiteID)
+	}
+	changed := false
+	if batch.Len() > 0 {
+		results := tx.SendBatch(r.Context(), batch)
+		for range items {
+			var tag pgconn.CommandTag
+			if tag, err = results.Exec(); err != nil {
+				_ = results.Close()
+				writeError(w, 500, "could not save procedures")
+				return
+			}
+			changed = changed || tag.RowsAffected() > 0
+		}
+		if err = results.Close(); err != nil {
 			writeError(w, 500, "could not save procedures")
+			return
+		}
+	}
+	if changed {
+		currentRevision++
+		if _, err = tx.Exec(r.Context(), "UPDATE procedure_catalog_revision SET revision=$1 WHERE id=1", currentRevision); err != nil {
+			writeError(w, 500, "could not update catalog revision")
 			return
 		}
 	}
@@ -684,6 +793,7 @@ func (s *server) saveProcedures(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 500, "could not save procedures")
 		return
 	}
+	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", currentRevision))
 	writeJSON(w, 200, items)
 }
 
@@ -696,6 +806,19 @@ func (s *server) deleteProcedure(w http.ResponseWriter, r *http.Request) {
 	defer tx.Rollback(r.Context())
 	if _, err := tx.Exec(r.Context(), "LOCK TABLE procedures IN SHARE ROW EXCLUSIVE MODE"); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not check procedure usage")
+		return
+	}
+	currentRevision, err := catalogRevision(r, tx)
+	if err != nil {
+		if errors.Is(err, errCatalogRevisionChanged) {
+			writeError(w, http.StatusConflict, err.Error())
+		} else if errors.Is(err, errMissingCatalogRevision) {
+			writeError(w, http.StatusPreconditionRequired, err.Error())
+		} else if errors.Is(err, errInvalidCatalogRevision) {
+			writeError(w, http.StatusBadRequest, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, "could not check catalog revision")
+		}
 		return
 	}
 	var referenced, requiredByCatalog bool
@@ -711,7 +834,8 @@ func (s *server) deleteProcedure(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "procedure is used in one or more patient plans")
 		return
 	}
-	if _, err := tx.Exec(r.Context(), "DELETE FROM procedures WHERE id=$1", r.PathValue("id")); err != nil {
+	deleteTag, err := tx.Exec(r.Context(), "DELETE FROM procedures WHERE id=$1", r.PathValue("id"))
+	if err != nil {
 		var postgresError *pgconn.PgError
 		if errors.As(err, &postgresError) && postgresError.Code == "23503" {
 			writeError(w, http.StatusConflict, "procedure is used in one or more patient plans")
@@ -720,10 +844,18 @@ func (s *server) deleteProcedure(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "could not delete procedure")
 		return
 	}
+	if deleteTag.RowsAffected() > 0 {
+		currentRevision++
+		if _, err := tx.Exec(r.Context(), "UPDATE procedure_catalog_revision SET revision=$1 WHERE id=1", currentRevision); err != nil {
+			writeError(w, http.StatusInternalServerError, "could not update catalog revision")
+			return
+		}
+	}
 	if err := tx.Commit(r.Context()); err != nil {
 		writeError(w, http.StatusInternalServerError, "could not delete procedure")
 		return
 	}
+	w.Header().Set("ETag", fmt.Sprintf("\"%d\"", currentRevision))
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -748,12 +880,7 @@ func loadDayPlan(ctx context.Context, db interface {
 	plan := dayPlan{Date: date, Plans: []patientPlan{}}
 	err := db.QueryRow(ctx, "SELECT revision, selected_patient_number FROM day_plans WHERE schedule_date=$1", date).Scan(&plan.Revision, &plan.SelectedPatientNumber)
 	if errors.Is(err, pgx.ErrNoRows) {
-		selectedPatient := 1
-		arrival, valid := parseISODate(date)
-		if !valid {
-			return dayPlan{}, fmt.Errorf("invalid course date")
-		}
-		return dayPlan{Date: date, SelectedPatientNumber: &selectedPatient, Plans: []patientPlan{{PatientNumber: 1, Severity: "medium", ArrivalDate: date, DepartureDate: arrival.AddDate(0, 0, 6).Format("2006-01-02"), StayDays: 7, CourseKey: date, ProcedureIDs: []string{}, ProcedureCounts: map[string]int{}}}}, nil
+		return plan, nil
 	}
 	if err != nil {
 		return plan, err

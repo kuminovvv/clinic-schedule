@@ -11,18 +11,20 @@ import {Label} from "@/shared/ui/shadcn/label"
 import type {SavedDayPlan} from "../model/types"
 import {PatientSelectionPanel} from "./patient-selection-panel"
 import {ProcedureCatalog} from "./procedure-catalog"
+import {ScheduleWarningsPanel} from "./schedule-warnings-panel"
 import {useSchedulePatients} from "./use-schedule-patients"
 
 type Props = {
     procedures: Procedure[]
+    catalogRevision: number
     initialPlan: SavedDayPlan
     dateKey: string
     tab: "patients" | "procedures"
 }
 
-export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Props) => {
+export const SchedulePatientsPage = ({procedures, catalogRevision, initialPlan, dateKey, tab}: Props) => {
     const router = useRouter()
-    const {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeTreatmentRange, changeProcedureCount, changeProcedurePrerequisite, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, flushProcedureSaves, flushPlanSaves, changeCourseDate, submit} = useSchedulePatients({procedures, initialPlan, dateKey})
+    const {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, planIssues, planConflict, isGenerating, procedureSaveError, procedureSaving, catalogConflict, retryProcedureSave, addPatient, removePatient, changeSeverity, changeTreatmentRange, changeProcedureCount, changeProcedurePrerequisite, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, flushProcedureSaves, flushPlanSaves, changeCourseDate, submit} = useSchedulePatients({procedures, catalogRevision, initialPlan, dateKey})
     const handleTabNavigation = async (event: MouseEvent<HTMLAnchorElement>, href: string) => {
         if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
         event.preventDefault()
@@ -58,6 +60,9 @@ export const SchedulePatientsPage = ({procedures, initialPlan, dateKey, tab}: Pr
                         ))}
                     </nav>
                     <div className="flex items-center justify-end gap-2 sm:ml-auto">
+                        {view === "procedures" && <span aria-live="polite" className={`text-xs ${procedureSaveError ? "text-red-700" : "text-slate-500"}`}>{catalogConflict ? "Каталог изменился в другом окне. Обновите страницу после проверки своих правок." : procedureSaveError ? "Не удалось сохранить каталог" : procedureSaving ? "Сохраняется…" : "Сохранено"}</span>}
+                        {view === "procedures" && procedureSaveError && !catalogConflict && <Button size="sm" type="button" variant="outline" onClick={retryProcedureSave}>Повторить</Button>}
+                        {view === "patients" && <ScheduleWarningsPanel courseVersion={JSON.stringify({dateKey, plans, procedureDrafts})} validationWarnings={planIssues}/>}
                         {view === "patients" && (
                             <Label className="flex items-center gap-2 text-xs text-slate-600">
                                 Дата плана

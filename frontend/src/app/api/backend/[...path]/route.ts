@@ -8,11 +8,14 @@ const forward = async (request: NextRequest, context: { params: Promise<{ path: 
   target.search = request.nextUrl.search
   const response = await fetch(target, {
     method: request.method,
-    headers: request.headers.get("content-type") ? { "Content-Type": request.headers.get("content-type")! } : undefined,
+    headers: {
+      ...(request.headers.get("content-type") ? {"Content-Type": request.headers.get("content-type")!} : {}),
+      ...(request.headers.get("if-match") ? {"If-Match": request.headers.get("if-match")!} : {}),
+    },
     body: request.method === "GET" || request.method === "HEAD" ? undefined : await request.arrayBuffer(),
     cache: "no-store",
   })
-  return new Response(response.body, { status: response.status, headers: { "Cache-Control": "no-store", "Content-Type": response.headers.get("content-type") ?? "application/json" } })
+  return new Response(response.body, { status: response.status, headers: { "Cache-Control": "no-store", "Content-Type": response.headers.get("content-type") ?? "application/json", ...(response.headers.get("etag") ? {ETag: response.headers.get("etag")!} : {}) } })
 }
 
 export const GET = forward

@@ -11,7 +11,7 @@ import {Select, SelectContent, SelectItem, SelectTrigger, SelectValue} from "@/s
 import {Switch} from "@/shared/ui/shadcn/switch"
 import {PatientTreatmentRange} from "./patient-treatment-range"
 import {PatientAbsenceControl} from "./patient-absence-control"
-import {formatDateLabel} from "@/shared/lib/date-range"
+import {formatDateLabel, inclusiveDayCount} from "@/shared/lib/date-range"
 import {requiredRelaxingSessions} from "../model/patient-plan-rules"
 
 const severityLabels: Record<Severity, string> = {high: "Высокая", medium: "Средняя", low: "Низкая"}
@@ -33,6 +33,8 @@ type PatientSelectionPanelProps = {
 
 export const PatientSelectionPanel = ({courseKey, plans, procedures, selectedPatientNumber, onSelectPatientAction, onAddPatientAction, onRemovePatientAction, onChangeSeverityAction, onChangeTreatmentRangeAction, onChangeProcedureCountAction, onChangeProcedurePrerequisiteAction, onToggleProcedureAction}: PatientSelectionPanelProps) => {
   const selectedPlan = plans.find((plan) => plan.patientNumber === selectedPatientNumber)
+  const treatmentDays = selectedPlan ? inclusiveDayCount(selectedPlan.arrivalDate, selectedPlan.departureDate) : 0
+  const datesReady = treatmentDays >= 1 && treatmentDays <= 365
   const requiredRelaxing = selectedPlan ? requiredRelaxingSessions(selectedPlan) : {}
   const relaxingOptions = procedures.filter((procedure) => procedure.isRelaxing)
   return (
@@ -72,6 +74,7 @@ export const PatientSelectionPanel = ({courseKey, plans, procedures, selectedPat
 	            departureDate={selectedPlan.departureDate}
 	            onChange={(arrivalDate, departureDate) => onChangeTreatmentRangeAction(selectedPlan.patientNumber, arrivalDate, departureDate)}
 	          />
+          {datesReady ? <>
 	          <PatientAbsenceControl courseKey={courseKey} patientNumber={selectedPlan.patientNumber} arrivalDate={selectedPlan.arrivalDate} departureDate={selectedPlan.departureDate}/>
           <div className="max-h-[40vh] overflow-y-auto lg:min-h-0 lg:max-h-none lg:flex-1">
             {procedures.length ? <div className="grid gap-2 xl:grid-cols-2">{procedures.map((procedure) => {
@@ -82,10 +85,11 @@ export const PatientSelectionPanel = ({courseKey, plans, procedures, selectedPat
                 <div className="flex min-w-0 items-center gap-2">
                   <Switch aria-label={`Процедура: ${procedure.name}`} checked={selected} onCheckedChange={(checked) => onToggleProcedureAction(procedure.id, checked)} size="sm"/>
                   <div className="min-w-0 flex-1"><span className="block truncate font-medium" title={procedure.name}>{procedure.name}</span></div>
-                  {selected && <Label className="flex shrink-0 items-center gap-1 text-xs" title={automaticallyAssigned ? "Подготовительные сеансы рассчитываются автоматически по назначениям пациента." : undefined}>{automaticallyAssigned ? "Авто" : "Сеансов"}
-                    <Input aria-label={`Количество сеансов: ${procedure.name}`} className="h-8 w-16 rounded-md px-2 text-sm" disabled={automaticallyAssigned} type="number" step={1} min={1} max={365} value={count} onChange={(event) => onChangeProcedureCountAction(selectedPlan.patientNumber, procedure.id, Number(event.target.value))}/>
+                  {selected && <Label className="flex shrink-0 items-center gap-1 text-xs" title={automaticallyAssigned ? `Для связанных процедур требуется минимум ${requiredRelaxing[procedure.id]} сеансов.` : undefined}>Сеансов
+                    <Input aria-label={`Количество сеансов: ${procedure.name}`} className="h-8 w-16 rounded-md px-2 text-sm" type="number" step={1} min={automaticallyAssigned ? requiredRelaxing[procedure.id] : 1} max={365} value={count} onChange={(event) => onChangeProcedureCountAction(selectedPlan.patientNumber, procedure.id, Number(event.target.value))}/>
                   </Label>}
                 </div>
+                {automaticallyAssigned && <p className="mt-1 pl-7 text-xs text-slate-500">Для подготовки нужно не меньше {requiredRelaxing[procedure.id]} сеансов.</p>}
                 {selected && selectedPlan.severity === "high" && !procedure.isRelaxing && (relaxingOptions.length > 0 || selectedPlan.procedurePrerequisites?.[procedure.id]) && <div className="mt-2 pl-7">
                   <Label className="mb-1 block text-xs text-slate-600">Подготовка перед процедурой</Label>
                   <Select onValueChange={(value) => value && onChangeProcedurePrerequisiteAction(selectedPlan.patientNumber, procedure.id, value === "catalog" ? "catalog" : value === "none" ? null : value)}
@@ -112,6 +116,7 @@ export const PatientSelectionPanel = ({courseKey, plans, procedures, selectedPat
               </div>
             })}</div> : <p className="px-3 py-8 text-center text-sm text-slate-500">В каталоге пока нет процедур. Добавьте их в разделе «Каталог процедур».</p>}
           </div>
+          </> : <div className="flex min-h-40 items-center justify-center rounded-xl bg-slate-50 px-5 text-center text-sm text-slate-600">Сначала выберите даты поступления и выезда. После этого станут доступны процедуры пациента.</div>}
         </Fragment> : <div className="flex min-h-48 items-center justify-center text-center text-sm text-slate-500">Выберите пациента или добавьте нового.</div>}
       </section>
     </div>

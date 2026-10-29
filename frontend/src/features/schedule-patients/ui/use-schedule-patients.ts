@@ -5,18 +5,18 @@ import type {Procedure} from "@/entities/procedure"
 import {BackendRequestError, sendBackendRequest} from "@/shared/api/backend-client"
 import {notify} from "@/shared/lib/notifications"
 import type {PatientPlan, SavedDayPlan, Severity} from "../model/types"
-import {addCalendarDays, inclusiveDayCount} from "@/shared/lib/date-range"
+import {inclusiveDayCount} from "@/shared/lib/date-range"
 import {useScheduleGeneration} from "./use-schedule-generation"
 import {useProcedureCatalog} from "./use-procedure-catalog"
-import {applyCatalogPrerequisites, getPatientPlanIssue, initialProcedureSessionCount} from "../model/patient-plan-rules"
+import {applyCatalogPrerequisites, getPatientPlanIssues, initialProcedureSessionCount, requiredRelaxingSessions} from "../model/patient-plan-rules"
 
 const planContentKey = (plans: PatientPlan[], selectedPatientNumber: number | null) =>
     JSON.stringify({plans, selectedPatientNumber})
 
-export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedures: Procedure[]; initialPlan: SavedDayPlan; dateKey: string}) => {
+export const useSchedulePatients = ({procedures, catalogRevision, initialPlan, dateKey}: {procedures: Procedure[]; catalogRevision: number; initialPlan: SavedDayPlan; dateKey: string}) => {
     const [plans, setPlans] = useState<PatientPlan[]>(initialPlan.plans)
-    const {procedureDrafts, setProcedureDraftsWithVersion, procedureSaveQueue, procedureSaveFailed, procedureSaveError,
-        validProcedures, updateProcedure, addProcedure, removeProcedure, flushProcedureSaves} = useProcedureCatalog(procedures, plans, setPlans)
+    const {procedureDrafts, procedureSaveFailed, procedureSaveError, procedureSaving, catalogConflict,
+        validProcedures, updateProcedure, addProcedure, removeProcedure, flushProcedureSaves, retryProcedureSave, saveProcedureDrafts} = useProcedureCatalog(procedures, catalogRevision, plans, setPlans)
     const [selectedPatientNumber, setSelectedPatientNumber] = useState<number | null>(initialPlan.selectedPatientNumber)
     const [saveError, setSaveError] = useState(false)
     const [planConflict, setPlanConflict] = useState(false)
@@ -26,13 +26,14 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
     const planSaveQueue = useRef(Promise.resolve())
     const planSaveTimer = useRef<number | null>(null)
     const planConflictRef = useRef(false)
-    const planIssue = getPatientPlanIssue(plans, procedureDrafts, dateKey)
+    const planIssues = getPatientPlanIssues(plans, procedureDrafts, dateKey)
+    const planIssue = planIssues[0] ?? null
     const previousIssueRef = useRef(planIssue)
 
     useEffect(() => {
         const previousIssue = previousIssueRef.current
         previousIssueRef.current = planIssue
-        if (!planIssue || planIssue === previousIssue) return
+        if (!planIssue || planIssue === previousIssue || planIssue.includes("выберите корректные даты поступления и выезда")) return
         // Wait for rapid changes in number inputs to settle before notifying.
         const timer = window.setTimeout(() => notify.constraint("Проверьте назначения пациента", planIssue), 650)
         return () => window.clearTimeout(timer)
@@ -80,7 +81,7 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
     const addPatient = () => {
         const patientNumber = Math.max(0, ...plans.map((item) => item.patientNumber)) + 1
         setSelectedPatientNumber(patientNumber)
-        setPlans((all) => [...all, {patientNumber, severity: "medium", arrivalDate: dateKey, departureDate: addCalendarDays(dateKey, 6), stayDays: 7, procedureIds: [], procedureCounts: {}, procedurePrerequisites: {}}])
+        setPlans((all) => [...all, {patientNumber, severity: "medium", arrivalDate: "", departureDate: "", stayDays: 0, procedureIds: [], procedureCounts: {}, procedurePrerequisites: {}}])
     }
     const removePatient = (patientNumber: number) => {
         const remaining = plans.filter((plan) => plan.patientNumber !== patientNumber)
@@ -103,8 +104,10 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
     }
     const changeProcedureCount = (patientNumber: number, procedureId: string, count: number) => {
         if (!Number.isInteger(count) || count < 1 || count > 365) return
-        setPlans((all) => all.map((plan) => plan.patientNumber === patientNumber
-            ? applyCatalogPrerequisites({...plan, procedureCounts: {...plan.procedureCounts, [procedureId]: count}}, procedureDrafts) : plan))
+        setPlans((all) => all.map((plan) => {
+            if (plan.patientNumber !== patientNumber || count < (requiredRelaxingSessions(plan)[procedureId] ?? 0)) return plan
+            return applyCatalogPrerequisites({...plan, procedureCounts: {...plan.procedureCounts, [procedureId]: count}}, procedureDrafts)
+        }))
     }
     const changeProcedurePrerequisite = (patientNumber: number, procedureId: string, prerequisiteId: string | null | "catalog") => {
         setPlans((all) => all.map((plan) => {
@@ -143,11 +146,11 @@ export const useSchedulePatients = ({procedures, initialPlan, dateKey}: {procedu
     }
     const validPlans = planIssue === null
     const {changeCourseDate, flushPlanSaves, submit} = useScheduleGeneration({
-        plans, procedureDrafts, setProcedureDrafts: setProcedureDraftsWithVersion, selectedPatientNumber, dateKey,
+        plans, procedureDrafts, saveProcedureDrafts, selectedPatientNumber, dateKey,
         validProcedures, validPlans, planIssue, isGenerating, setIsGenerating, setSaveError,
-        planConflictRef, setPlanConflict, procedureSaveQueue, procedureSaveFailed,
+        planConflictRef, setPlanConflict, procedureSaveFailed, flushProcedureSaves,
         planSaveQueue, planSaveTimerRef: planSaveTimer, lastSavedPlan, savePlanDraft,
     })
 
-    return {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, saveError: saveError || procedureSaveError, planIssue, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeTreatmentRange, changeProcedureCount, changeProcedurePrerequisite, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, validPlans, flushProcedureSaves, flushPlanSaves, changeCourseDate, submit}
+    return {plans, procedureDrafts, selectedPatientNumber, setSelectedPatientNumber, saveError: saveError || procedureSaveError, procedureSaveError, procedureSaving, catalogConflict, retryProcedureSave, planIssue, planIssues, planConflict, isGenerating, addPatient, removePatient, changeSeverity, changeTreatmentRange, changeProcedureCount, changeProcedurePrerequisite, toggleProcedure, updateProcedure, addProcedure, removeProcedure, validProcedures, validPlans, flushProcedureSaves, flushPlanSaves, changeCourseDate, submit}
 }

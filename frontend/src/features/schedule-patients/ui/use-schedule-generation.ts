@@ -17,7 +17,7 @@ type SchedulePreview = {
 type UseScheduleGenerationProps = {
   plans: PatientPlan[]
   procedureDrafts: Procedure[]
-  setProcedureDrafts: (procedures: Procedure[]) => void
+  saveProcedureDrafts: (procedures: Procedure[]) => Promise<boolean>
   selectedPatientNumber: number | null
   dateKey: string
   validProcedures: boolean
@@ -28,7 +28,7 @@ type UseScheduleGenerationProps = {
   setSaveError: (hasError: boolean) => void
   planConflictRef: {current: boolean}
   setPlanConflict: (hasConflict: boolean) => void
-  procedureSaveQueue: {current: Promise<void>}
+  flushProcedureSaves: () => Promise<boolean>
   procedureSaveFailed: {current: boolean}
   planSaveQueue: {current: Promise<void>}
   planSaveTimerRef: {current: number | null}
@@ -36,15 +36,21 @@ type UseScheduleGenerationProps = {
   savePlanDraft: (plans: PatientPlan[], patientNumber: number | null) => Promise<void>
 }
 
+const publishScheduleWarnings = (warnings: string[], courseVersion: string) => {
+  if (typeof window === "undefined") return
+  window.dispatchEvent(new CustomEvent("clinic:schedule-warnings", {detail: {warnings, courseVersion}}))
+}
+
 export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
   const router = useRouter()
   const {
-    plans, procedureDrafts, setProcedureDrafts, selectedPatientNumber, dateKey,
+    plans, procedureDrafts, saveProcedureDrafts, selectedPatientNumber, dateKey,
     validProcedures, validPlans, planIssue, isGenerating, setIsGenerating, setSaveError,
-    planConflictRef, setPlanConflict, procedureSaveQueue, procedureSaveFailed,
+    planConflictRef, setPlanConflict, flushProcedureSaves, procedureSaveFailed,
     planSaveQueue, planSaveTimerRef, lastSavedPlan, savePlanDraft,
   } = props
   const confirmationId = `course-confirm:${dateKey}`
+  const courseVersion = JSON.stringify({dateKey, plans, procedureDrafts})
   const currentCourseKey = JSON.stringify({plans, procedureDrafts, selectedPatientNumber})
   const currentCourseKeyRef = useRef(currentCourseKey)
 
@@ -58,6 +64,7 @@ export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
     setIsGenerating(true)
     try {
       await sendBackendRequest("/v1/schedules/generate", "POST", {date: dateKey})
+      publishScheduleWarnings([], courseVersion)
       router.push("/?date=" + dateKey)
     } catch {
       // Shared API notifications explain why generation could not finish.
@@ -72,6 +79,10 @@ export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
       planSaveTimerRef.current = null
     }
     if (planConflictRef.current) return false
+    if (planIssue) {
+      notify.constraint("Сначала завершите назначение", planIssue)
+      return false
+    }
     try {
       await planSaveQueue.current
       if (JSON.stringify({plans, selectedPatientNumber}) !== lastSavedPlan.current) await savePlanDraft(plans, selectedPatientNumber)
@@ -92,8 +103,7 @@ export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
     const date = new Date(`${nextDate}T00:00:00Z`)
     if (!/^\d{4}-\d{2}-\d{2}$/.test(nextDate) || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== nextDate || nextDate === dateKey || isGenerating) return
     try {
-      await procedureSaveQueue.current
-      if (procedureSaveFailed.current) return
+      if (!(await flushProcedureSaves()) || procedureSaveFailed.current) return
       if (!(await flushPlanSaves())) return
       router.push(`/schedule/patients?date=${encodeURIComponent(nextDate)}`)
     } catch (error) {
@@ -108,6 +118,7 @@ export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
 
   const submit = async () => {
     if (!validPlans) {
+      publishScheduleWarnings(planIssue ? [planIssue] : ["Проверьте назначения и количество сеансов."], courseVersion)
       notify.constraint("Что нужно изменить перед составлением курса", planIssue ?? "Проверьте назначения и количество сеансов.")
       return
     }
@@ -118,10 +129,13 @@ export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
       planSaveTimerRef.current = null
     }
     const savedProcedures = procedureDrafts.map((procedure) => ({...procedure, name: procedure.name.trim()}))
-    setProcedureDrafts(savedProcedures)
+    const savedCourseVersion = JSON.stringify({dateKey, plans, procedureDrafts: savedProcedures})
     try {
-      await procedureSaveQueue.current
-      await sendBackendRequest<Procedure[]>("/v1/procedures", "PUT", savedProcedures)
+      if (!(await saveProcedureDrafts(savedProcedures))) {
+        setSaveError(true)
+        setIsGenerating(false)
+        return
+      }
       await planSaveQueue.current
       await savePlanDraft(plans, selectedPatientNumber)
       setSaveError(false)
@@ -141,10 +155,13 @@ export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
     try {
       const preview = await sendBackendRequest<SchedulePreview>("/v1/schedules/generate", "POST", {date: dateKey, preview: true})
       if (preview && preview.unscheduledCount > 0) {
-        notify.constraint("Не все сеансы помещаются в курс", formatUnscheduledDetails(preview.unscheduledDetails ?? [], preview.unscheduledCount))
+        const warning = formatUnscheduledDetails(preview.unscheduledDetails ?? [], preview.unscheduledCount)
+        publishScheduleWarnings([warning], savedCourseVersion)
+        notify.constraint("Не все сеансы помещаются в курс", warning)
         return
       }
       if (preview?.warnings?.length) {
+        publishScheduleWarnings(preview.warnings, savedCourseVersion)
         const previewCourseKey = JSON.stringify({plans, procedureDrafts: savedProcedures, selectedPatientNumber})
         notify.confirmConstraint(confirmationId, "Проверьте ограничения курса", preview.warnings.join("\n"), () => {
           if (currentCourseKeyRef.current !== previewCourseKey) {
@@ -155,6 +172,7 @@ export const useScheduleGeneration = (props: UseScheduleGenerationProps) => {
         })
         return
       }
+      publishScheduleWarnings([], savedCourseVersion)
       await sendBackendRequest("/v1/schedules/generate", "POST", {date: dateKey})
       router.push("/?date=" + dateKey)
     } catch {

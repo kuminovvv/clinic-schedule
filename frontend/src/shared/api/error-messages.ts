@@ -32,6 +32,9 @@ export const explainApiError = ({status, reason = "", path, method, unscheduledD
     return {type: "error", title: "Не удалось связаться с программой", description: "Проверьте подключение и повторите действие."}
   }
   if (status === 409) {
+    if (isProcedure && message.includes("catalog revision changed")) {
+      return {type: "warning", title: "Каталог изменился в другом окне", description: "Сохранение остановлено. Обновите страницу и проверьте процедуры перед повторной правкой."}
+    }
     const weeklyConflict = reason.match(/procedure "([^"]+)" exceeds (\d+) sessions in seven days/i)
     if (weeklyConflict) {
       const [, procedure, limit] = weeklyConflict

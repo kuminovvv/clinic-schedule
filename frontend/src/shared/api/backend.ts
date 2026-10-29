@@ -24,3 +24,11 @@ export const getServerData = async <T>(path: string): Promise<T> => {
   if (!response.ok) throw new Error("Backend request failed: " + response.status)
   return response.json() as Promise<T>
 }
+
+export const getServerDataWithRevision = async <T>(path: string): Promise<{data: T; revision: number}> => {
+  const response = await fetch(getBackendBaseUrl() + path, {cache: "no-store"})
+  if (!response.ok) throw new Error("Backend request failed: " + response.status)
+  const revision = Number(response.headers.get("etag")?.replaceAll('"', ""))
+  if (!Number.isSafeInteger(revision) || revision < 0) throw new Error("Backend catalog revision is missing")
+  return {data: await response.json() as T, revision}
+}

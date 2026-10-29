@@ -55,22 +55,27 @@ export const applyCatalogPrerequisites = (plan: PatientPlan, procedures: Procedu
   return balanceRelaxingSessions({...plan, procedureIds, procedureCounts, procedurePrerequisites: effective})
 }
 
-export const getPatientPlanIssue = (plans: PatientPlan[], procedures: Procedure[], courseKey: string): string | null => {
+export const getPatientPlanIssues = (plans: PatientPlan[], procedures: Procedure[], courseKey: string): string[] => {
+  const issues: string[] = []
   for (const plan of plans) {
     const label = `Пациент ${plan.patientNumber}`
     const days = inclusiveDayCount(plan.arrivalDate, plan.departureDate)
     if (!parseDateKey(plan.arrivalDate) || !parseDateKey(plan.departureDate) || days < 1 || days > 365 || days !== plan.stayDays) {
-      return `${label}: выберите корректные даты поступления и выезда (от 1 до 365 дней).`
+      issues.push(`${label}: выберите корректные даты поступления и выезда (от 1 до 365 дней).`)
+      continue
     }
     if (plan.arrivalDate < courseKey || plan.departureDate >= addCalendarDays(courseKey, 365)) {
-      return `${label}: лечение должно проходить в течение 365 дней от даты плана ${courseKey}. Измените дату плана или даты пациента.`
+      issues.push(`${label}: лечение должно проходить в течение 365 дней от даты плана ${courseKey}. Измените дату плана или даты пациента.`)
     }
     for (const id of plan.procedureIds) {
       const count = plan.procedureCounts[id]
       const procedure = procedures.find((item) => item.id === id)
-      if (!procedure) return `${label}: назначенная процедура удалена из каталога. Уберите её из списка.`
+      if (!procedure) {
+        issues.push(`${label}: назначенная процедура удалена из каталога. Уберите её из списка.`)
+        continue
+      }
       if (!Number.isInteger(count) || count < 1 || count > 365) {
-        return `${label}: для «${procedure.name}» укажите целое количество сеансов от 1 до 365.`
+        issues.push(`${label}: для «${procedure.name}» укажите целое количество сеансов от 1 до 365.`)
       }
     }
     const required = requiredRelaxingSessions(plan)
@@ -79,7 +84,7 @@ export const getPatientPlanIssue = (plans: PatientPlan[], procedures: Procedure[
       const relaxing = procedures.find((item) => item.id === relaxingId)
       if (plan.severity !== "high" || !target || target.isRelaxing || !relaxing?.isRelaxing ||
         !plan.procedureIds.includes(targetId) || !plan.procedureIds.includes(relaxingId)) {
-        return `${label}: измените зависимость процедур — сложная и расслабляющая должны быть назначены пациенту.`
+        issues.push(`${label}: измените зависимость процедур — сложная и расслабляющая должны быть назначены пациенту.`)
       }
     }
     for (const [id, count] of Object.entries(required)) {
@@ -96,10 +101,10 @@ export const getPatientPlanIssue = (plans: PatientPlan[], procedures: Procedure[
           })
           .join(", ")
         const details = frequencyAdvice(relaxing, count, plan.stayDays)
-        return `${label}: назначено ${targets}. Для подготовки нужно ${count} сеансов «${relaxing.name}», но их нельзя разместить. ${details ?? ""} Увеличьте срок в «Датах поступления и выезда» или сократите сложные сеансы. Изменение правил каталога согласуйте с врачом.`
+        issues.push(`${label}: назначено ${targets}. Для подготовки нужно ${count} сеансов «${relaxing.name}», но их нельзя разместить. ${details ?? ""} Увеличьте срок в «Датах поступления и выезда» или сократите сложные сеансы. Изменение правил каталога согласуйте с врачом.`)
       }
       if (assigned < count) {
-        return `${label}: системе нужно ${count} подготовительных сеансов «${relaxing.name}», но пока назначено ${assigned}. Измените количество сложных сеансов или даты лечения. Подготовка пересчитается сама.`
+        issues.push(`${label}: системе нужно ${count} подготовительных сеансов «${relaxing.name}», но пока назначено ${assigned}. Измените количество сложных сеансов или даты лечения. Подготовка пересчитается сама.`)
       }
     }
     for (const id of plan.procedureIds) {
@@ -108,9 +113,9 @@ export const getPatientPlanIssue = (plans: PatientPlan[], procedures: Procedure[
       const count = plan.procedureCounts[id] ?? 0
       const advice = frequencyAdvice(procedure, count, plan.stayDays)
       if (advice) {
-        return `${label}: «${procedure.name}» — запрошено ${count} сеансов, но такой курс нарушает правила частоты. ${advice} Уменьшите количество сеансов или увеличьте даты лечения. Изменять правила каталога можно только после согласования с врачом.`
+        issues.push(`${label}: «${procedure.name}» — запрошено ${count} сеансов, но такой курс нарушает правила частоты. ${advice} Уменьшите количество сеансов или увеличьте даты лечения. Изменять правила каталога можно только после согласования с врачом.`)
       }
     }
   }
-  return null
+  return issues
 }

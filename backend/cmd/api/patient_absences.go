@@ -214,6 +214,11 @@ func (s *server) savePatientAbsence(w http.ResponseWriter, r *http.Request) {
 			writeError(w, 500, "could not load patient appointments")
 			return
 		}
+		// PostgreSQL timestamps have no zone. Interpret their clock fields in
+		// the clinic zone, just like occupied slots, so removal compares the
+		// same instants and does not count the relocated session twice.
+		item.start = time.Date(item.start.Year(), item.start.Month(), item.start.Day(), item.start.Hour(), item.start.Minute(), 0, 0, time.Local)
+		item.end = time.Date(item.end.Year(), item.end.Month(), item.end.Day(), item.end.Hour(), item.end.Minute(), 0, 0, time.Local)
 		treatments = append(treatments, item)
 	}
 	if err := rows.Err(); err != nil {

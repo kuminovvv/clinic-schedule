@@ -35,11 +35,12 @@ export const requestBackend = async <T>(
   path: string,
   method: RequestMethod = "GET",
   body?: unknown,
+  options?: {headers?: Record<string, string>; onResponse?: (response: Response) => void},
 ): Promise<T | null> => {
   try {
     const response = await fetch("/api/backend" + path, {
       method,
-      headers: body === undefined ? undefined : {"Content-Type": "application/json"},
+      headers: { ...(body === undefined ? {} : {"Content-Type": "application/json"}), ...options?.headers },
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: "no-store",
     })
@@ -47,6 +48,7 @@ export const requestBackend = async <T>(
       const {reason, details, count} = await getErrorDetails(response)
       throw new BackendRequestError(response.status, reason, path, details, count)
     }
+    options?.onResponse?.(response)
     if (response.status === 204) return null
     try {
       return await response.json() as T
@@ -71,4 +73,5 @@ export const getClientData = async <T>(path: string): Promise<T> => {
 
 export const sendBackendRequest = <T>(
   path: string, method: Exclude<RequestMethod, "GET">, body?: unknown,
-): Promise<T | null> => requestBackend<T>(path, method, body)
+  options?: {headers?: Record<string, string>; onResponse?: (response: Response) => void},
+): Promise<T | null> => requestBackend<T>(path, method, body, options)
