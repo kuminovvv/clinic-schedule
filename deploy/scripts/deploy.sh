@@ -62,6 +62,11 @@ finish() {
 
   if [[ "$result" -ne 0 && "$changed" == true ]]; then
     echo "Release $RELEASE_TAG failed. Restoring the previous configuration..." >&2
+    # Stop both application versions before restoring their shared API contract.
+    if [[ "$had_compose" == true ]]; then
+      compose stop frontend || true
+      compose stop backend || true
+    fi
     cp -p -- "$backup_dir/.env" "$ENV_FILE"
 
     if [[ "$had_compose" == true ]]; then
@@ -136,19 +141,6 @@ if [[ -f "$APP_DIR/deploy/backup.sh" ]]; then
   had_backup_script=true
 fi
 
-# pg_dump runs before the new backend starts (and applies schema migrations).
-# A pre-existing but stopped database must not be upgraded without a backup.
-if [[ "$had_compose" == true ]]; then
-  db_id="$(compose ps --all -q db)"
-  if [[ -n "$db_id" ]]; then
-    if [[ "$(docker inspect -f '{{.State.Running}}' "$db_id")" != "true" ]]; then
-      echo "Database exists but is not running; resolve this before deploying." >&2
-      exit 1
-    fi
-    sh "$RELEASE_DIR/backup.sh"
-  fi
-fi
-
 # Keep the existing secret values and file permissions. Do not source .env
 # because passwords and bcrypt strings are not necessarily valid shell syntax.
 next_env="$(mktemp "$APP_DIR/.env.next.XXXXXXXX")"
@@ -168,5 +160,19 @@ cp -p -- "$RELEASE_DIR/backup.sh" "$APP_DIR/deploy/backup.sh"
 
 compose config --quiet
 compose pull backend frontend
+
+# Pull before downtime; stop writers together before the backup and migrations.
+# Old and new frontend/backend API contracts must never serve concurrently.
+if [[ "$had_compose" == true ]]; then
+  compose stop frontend
+  compose stop backend
+  db_id="$(compose ps --all -q db)"
+  if [[ -z "$db_id" || "$(docker inspect -f '{{.State.Running}}' "$db_id")" != "true" ]]; then
+    echo "Database is missing or not running; refusing to deploy." >&2
+    exit 1
+  fi
+  sh "$RELEASE_DIR/backup.sh"
+fi
+
 compose up -d --no-build --wait --wait-timeout 240
 echo "Release $RELEASE_TAG is running and Compose health checks passed."
